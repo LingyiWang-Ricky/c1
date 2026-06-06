@@ -22,7 +22,10 @@ try:
 except ImportError:
     sns = None
 
-from configparser import ConfigParser
+if __package__:
+    from .config_loader import read_required_config
+else:
+    from config_loader import read_required_config
 
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -39,9 +42,7 @@ class TrainingUi(QWidget):
     def __init__(self, config):
         super(TrainingUi, self).__init__()
         # config
-        self.cfg = ConfigParser()
-        self.cfg.read(config)
-        print(self.cfg.sections())
+        self.cfg, self.config_file = read_required_config(config)
 
         self.init_ui()
 

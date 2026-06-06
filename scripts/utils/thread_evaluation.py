@@ -1,19 +1,29 @@
+import os
+import sys
+
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+SCRIPTS_DIR = os.path.dirname(CURRENT_DIR)
+PROJECT_ROOT = os.path.dirname(SCRIPTS_DIR)
+GYM_ENV_DIR = os.path.join(PROJECT_ROOT, "gym_env")
+if GYM_ENV_DIR not in sys.path:
+    sys.path.insert(0, GYM_ENV_DIR)
+if SCRIPTS_DIR not in sys.path:
+    sys.path.append(SCRIPTS_DIR)
+
 from PyQt5 import QtCore
-from configparser import ConfigParser
 from stable_baselines3 import TD3, SAC, PPO
 import numpy as np
 import gym_env
 import gym
 import math
 import argparse
-import os
-import sys
 import cv2
 from tqdm import tqdm
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-SCRIPTS_DIR = os.path.dirname(CURRENT_DIR)
-if SCRIPTS_DIR not in sys.path:
-    sys.path.append(SCRIPTS_DIR)
+
+if __package__:
+    from .config_loader import read_required_config
+else:
+    from config_loader import read_required_config
 
 if __package__:
     from .sequence_gpide import is_sequence_gpide_enabled, load_sequence_agent
@@ -54,8 +64,7 @@ class EvaluateThread(QtCore.QThread):
         print("init training thread")
 
         # config
-        self.cfg = ConfigParser()
-        self.cfg.read(config)
+        self.cfg, self.config_file = read_required_config(config)
 
         # change eval_env and eval_dynamics if is not None
         if eval_env is not None:

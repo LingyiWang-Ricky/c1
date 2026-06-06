@@ -1,6 +1,16 @@
 import datetime
 import os
 import sys
+
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+SCRIPTS_DIR = os.path.dirname(CURRENT_DIR)
+PROJECT_ROOT = os.path.dirname(SCRIPTS_DIR)
+GYM_ENV_DIR = os.path.join(PROJECT_ROOT, "gym_env")
+if GYM_ENV_DIR not in sys.path:
+    sys.path.insert(0, GYM_ENV_DIR)
+if SCRIPTS_DIR not in sys.path:
+    sys.path.append(SCRIPTS_DIR)
+
 import gym
 import gym_env
 import numpy as np
@@ -11,13 +21,12 @@ import wandb
 from PyQt5 import QtCore
 import argparse
 import ast
-from configparser import ConfigParser
 import torch as th
 
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-SCRIPTS_DIR = os.path.dirname(CURRENT_DIR)
-if SCRIPTS_DIR not in sys.path:
-    sys.path.append(SCRIPTS_DIR)
+if __package__:
+    from .config_loader import read_required_config
+else:
+    from config_loader import read_required_config
 
 if __package__:
     from .custom_policy_sb3 import CNN_FC, CNN_GAP, CNN_GAP_BN, No_CNN, CNN_MobileNet, CNN_GAP_new
@@ -70,8 +79,7 @@ class TrainingThread(QtCore.QThread):
         print("init training thread")
 
         # config
-        self.cfg = ConfigParser()
-        self.cfg.read(config)
+        self.cfg, self.config_file = read_required_config(config)
 
         env_name = self.cfg.get('options', 'env_name')
         self.project_name = env_name
