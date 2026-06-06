@@ -20,8 +20,15 @@ class MultirotorDynamicsAirsim():
         # AirSim Client
         self.client = airsim.MultirotorClient()
         self.client.confirmConnection()
-        self.client.enableApiControl(True)
-        self.client.armDisarm(True)
+        try:
+            self.client.enableApiControl(True)
+            self.client.armDisarm(True)
+        except Exception as exc:
+            raise RuntimeError(
+                "AirSim vehicle API is not available for dynamic_name=Multirotor. "
+                "Start AirSim with SimMode=Multirotor and a valid vehicle, or use "
+                "dynamic_name=SimpleMultirotor with ComputerVision/simple-dynamics settings."
+            ) from exc
 
         # start and goal position
         self.start_position = [0, 0, 0]
