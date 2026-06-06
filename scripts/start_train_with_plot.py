@@ -20,7 +20,7 @@ def get_parser():
     parser.add_argument(
         "--config",
         "-config",
-        default=os.path.join("configs", "config_GPIDE_Sequence_SimpleAvoid_Multirotor_2D.ini"),
+        default=os.path.join("configs", "config_Maze_SimpleMultirotor_2D.ini"),
         help="Path to config ini file.",
     )
     parser.add_argument(
