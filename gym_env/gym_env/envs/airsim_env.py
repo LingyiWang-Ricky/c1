@@ -250,6 +250,7 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
         info = self.get_done_info()
         done = info['done']
         self._current_step_info = info
+        self._add_constraint_info(info, action)
         if done:
             print(info)
 
@@ -947,6 +948,63 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
             'done': done,
             'step_num': self.step_num + 1
         }
+
+    def _add_constraint_info(self, info, action):
+        """Attach safety costs used by GPIDE/FOCOPS sequence SAC.
+
+        The sequence agent reads ``info['constraint_cost']`` as the cost target
+        for its FOCOPS-inspired cost critics.  Keep this independent from the
+        scalar reward so reward shaping and safety constraints can be tuned
+        separately.  Crash receives a terminal cost even if the obstacle distance
+        was not measurable on that step.
+        """
+        if info is None:
+            return
+
+        safe_distance = self._cfg_getfloat('constraint', 'safe_distance', self.crash_distance + 3.0)
+        crash_cost = self._cfg_getfloat('constraint', 'crash_cost', 1.0)
+        outside_cost = self._cfg_getfloat('constraint', 'outside_cost', 0.5)
+        action_cost_coef = self._cfg_getfloat('constraint', 'action_cost_coef', 0.05)
+        yaw_cost_coef = self._cfg_getfloat('constraint', 'yaw_cost_coef', 0.05)
+
+        distance_margin = max(safe_distance - self.crash_distance, 1e-6)
+        min_distance = float(getattr(self, 'min_distance_to_obstacles', safe_distance))
+        if np.isfinite(min_distance):
+            obstacle_cost = 1.0 - np.clip((min_distance - self.crash_distance) / distance_margin, 0.0, 1.0)
+        else:
+            obstacle_cost = 0.0
+
+        action_arr = np.asarray(action, dtype=np.float32).reshape(-1)
+        if action_arr.size:
+            action_span = np.maximum(np.asarray(self.action_space.high, dtype=np.float32).reshape(-1), 1e-6)
+            action_cost = float(np.clip(np.mean(np.abs(action_arr) / action_span), 0.0, 1.0))
+        else:
+            action_cost = 0.0
+
+        yaw_error = 0.0
+        if hasattr(self.dynamic_model, 'state_raw') and len(self.dynamic_model.state_raw) > 2:
+            yaw_error = float(abs(self.dynamic_model.state_raw[2]) / 180.0)
+        yaw_error_cost = float(np.clip(yaw_error, 0.0, 1.0))
+
+        terminal_cost = 0.0
+        if info.get('is_crash'):
+            terminal_cost = crash_cost
+            obstacle_cost = max(float(obstacle_cost), crash_cost)
+        elif info.get('is_not_in_workspace'):
+            terminal_cost = outside_cost
+
+        constraint_cost = max(
+            terminal_cost,
+            float(obstacle_cost) + action_cost_coef * action_cost + yaw_cost_coef * yaw_error_cost,
+        )
+        info.update({
+            'constraint_cost': float(np.clip(constraint_cost, 0.0, max(1.0, crash_cost))),
+            'obstacle_cost': float(np.clip(obstacle_cost, 0.0, max(1.0, crash_cost))),
+            'action_cost': action_cost,
+            'yaw_error_cost': yaw_error_cost,
+            'distance_to_goal': float(self.dynamic_model.goal_distance),
+            'min_distance_to_obstacles': min_distance,
+        })
 
     def _cfg_getfloat(self, section, option, default):
         try:
