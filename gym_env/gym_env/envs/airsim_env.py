@@ -45,6 +45,7 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
         self.dynamic_name = cfg.get('options', 'dynamic_name')
         self.keyboard_debug = cfg.getboolean('options', 'keyboard_debug')
         self.generate_q_map = cfg.getboolean('options', 'generate_q_map')
+        self.print_train_info = cfg.getboolean('options', 'print_train_info', fallback=True)
         self.perception_type = cfg.get('options', 'perception')
 
         # create LGMD agent
@@ -267,7 +268,8 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
         self.cumulated_episode_reward += reward
 
         # ----------------print info---------------------------
-        self.print_train_info_airsim(action, obs, reward, info)
+        if self.print_train_info:
+            self.print_train_info_airsim(action, obs, reward, info)
 
         if self.cfg.get('options', 'dynamic_name') == 'SimpleFixedwing':
             self.set_pyqt_signal_fixedwing(action, reward, done)
@@ -966,6 +968,8 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
 # ! -----------used for plot or show states------------------------------------------------------------------
 
     def print_train_info_airsim(self, action, obs, reward, info):
+        if not self.print_train_info:
+            return
         # if self.perception_type == 'split' or self.perception_type == 'lgmd':
         #     feature_all = self.feature_all
         # elif self.perception_type == 'vector':
