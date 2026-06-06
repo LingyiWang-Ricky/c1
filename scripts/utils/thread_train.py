@@ -163,6 +163,8 @@ class TrainingThread(QtCore.QThread):
             max_episodes = self.cfg.getint('options', 'max_episodes', fallback=0)
             min_ent_coef = self.cfg.getfloat('DRL', 'min_ent_coef', fallback=0.0)
             csv_path = os.path.join(data_path, 'training_log.csv')
+            episode_csv_path = os.path.join(data_path, 'episode_log.csv')
+            metrics_json_path = os.path.join(data_path, 'metrics_summary.json')
             model.learn(
                 total_timesteps,
                 checkpoint_dir=model_path,
@@ -171,11 +173,14 @@ class TrainingThread(QtCore.QThread):
                 tensorboard_log=log_path,
                 max_episodes=max_episodes,
                 min_ent_coef=min_ent_coef,
+                episode_csv_path=episode_csv_path,
+                metrics_json_path=metrics_json_path,
             )
             model_name = 'model_sequence_gpide.pt'
-            model.save(os.path.join(model_path, model_name), total_step=total_timesteps)
+            model.save(os.path.join(model_path, model_name), total_step=model.total_steps)
             print('training finished')
             print('model saved to: {}'.format(model_path))
+            print('training data saved to: {}'.format(data_path))
             return
 
         #! -----------------------------------policy selection-------------------------------------
