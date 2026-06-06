@@ -15,7 +15,10 @@ SCRIPTS_DIR = os.path.dirname(CURRENT_DIR)
 if SCRIPTS_DIR not in sys.path:
     sys.path.append(SCRIPTS_DIR)
 
-from algorithms.sequence_sac import is_sequence_gpide_enabled, load_sequence_agent
+if __package__:
+    from .sequence_gpide import is_sequence_gpide_enabled, load_sequence_agent
+else:
+    from sequence_gpide import is_sequence_gpide_enabled, load_sequence_agent
 
 
 def rule_based_policy(obs):

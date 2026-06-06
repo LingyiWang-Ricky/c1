@@ -177,7 +177,6 @@ class MultirotorDynamicsAirsim():
         random_angle = random_angle_set
         noise = np.random.random()
         angle = random_angle * noise - math.pi   # -pi~pi
-        rect = [-128, -128, 128, 128]
         # goal_x = 100*math.sin(angle)
         # goal_y = 100*math.cos(angle)
 

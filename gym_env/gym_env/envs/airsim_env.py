@@ -97,12 +97,16 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
             self.work_space_y = [-300, 100]
             self.work_space_z = [0, 100]
             self.max_episode_steps = 400
-        elif self.env_name == 'City_400':
-            # note: the start and end points will be covered by update_start_and_goal_pose_random function
+        elif self.env_name in ('City_400', 'City_400_400'):
             start_position = [0, 0, 50]
-            goal_position = [280, -200, 50]
-            self.dynamic_model.set_start(start_position, random_angle=0)
-            self.dynamic_model._set_goal_pose_single(goal_position)
+            goal_rect = [-220, -220, 220, 220]
+            self.dynamic_model.set_start(start_position, random_angle=math.pi*2)
+            if hasattr(self.dynamic_model, '_set_goal_pose_single'):
+                # Fixed-wing dynamics randomize the start/goal rectangle at reset.
+                self.dynamic_model._set_goal_pose_single([200, -200, 50])
+            else:
+                # Multirotor dynamics randomize the goal on the City_400 boundary.
+                self.dynamic_model.set_goal(rect=goal_rect, random_angle=math.pi*2)
             self.work_space_x = [-220, 220]
             self.work_space_y = [-220, 220]
             self.work_space_z = [0, 100]

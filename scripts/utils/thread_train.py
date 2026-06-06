@@ -19,12 +19,15 @@ SCRIPTS_DIR = os.path.dirname(CURRENT_DIR)
 if SCRIPTS_DIR not in sys.path:
     sys.path.append(SCRIPTS_DIR)
 
-try:
+if __package__:
     from .custom_policy_sb3 import CNN_FC, CNN_GAP, CNN_GAP_BN, No_CNN, CNN_MobileNet, CNN_GAP_new
-except ImportError:
+else:
     from custom_policy_sb3 import CNN_FC, CNN_GAP, CNN_GAP_BN, No_CNN, CNN_MobileNet, CNN_GAP_new
 
-from algorithms.sequence_sac import build_sequence_agent, is_sequence_gpide_enabled
+if __package__:
+    from .sequence_gpide import build_sequence_agent, is_sequence_gpide_enabled
+else:
+    from sequence_gpide import build_sequence_agent, is_sequence_gpide_enabled
 
 
 class Tee:
