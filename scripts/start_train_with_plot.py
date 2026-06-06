@@ -1,14 +1,16 @@
 import argparse
 import os
 import sys
-from configparser import ConfigParser
 
 from PyQt5 import QtWidgets
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
+GYM_ENV_DIR = os.path.join(PROJECT_ROOT, "gym_env")
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
+if GYM_ENV_DIR not in sys.path:
+    sys.path.insert(0, GYM_ENV_DIR)
 if CURRENT_DIR not in sys.path:
     sys.path.insert(0, CURRENT_DIR)
 os.chdir(PROJECT_ROOT)
@@ -20,7 +22,7 @@ def get_parser():
     parser.add_argument(
         "--config",
         "-config",
-        default=os.path.join("configs", "config_GPIDE_Sequence_SimpleAvoid_Multirotor_2D.ini"),
+        default=os.path.join("configs", "config_Maze_SimpleMultirotor_2D.ini"),
         help="Path to config ini file.",
     )
     parser.add_argument(
@@ -32,19 +34,14 @@ def get_parser():
     return parser
 
 
-def resolve_path(path):
-    if os.path.isabs(path):
-        return path
-    return os.path.join(PROJECT_ROOT, path)
-
-
 def main():
     parser = get_parser()
     args = parser.parse_args()
-    config_file = resolve_path(args.config)
-
+    from utils.config_loader import read_required_config
     from utils.thread_train import TrainingThread
     from utils.ui_train import TrainingUi
+
+    cfg, config_file = read_required_config(args.config)
 
     app = QtWidgets.QApplication(sys.argv)
     gui = TrainingUi(config_file)
@@ -57,8 +54,6 @@ def main():
     training_thread.env.reward_signal.connect(gui.reward_plot_cb)
     training_thread.env.pose_signal.connect(gui.traj_plot_cb)
 
-    cfg = ConfigParser()
-    cfg.read(config_file)
     if cfg.has_option("options", "perception") and cfg.get("options", "perception") == "lgmd":
         training_thread.env.lgmd_signal.connect(gui.lgmd_plot_cb)
 
