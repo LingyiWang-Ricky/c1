@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import copy
 import csv
+import json
 import math
 import os
 from dataclasses import dataclass
@@ -138,11 +139,12 @@ class ObservationVectorizer:
 class SequenceReplayBuffer:
     """Episode-aware replay buffer that samples fixed-length history windows."""
 
-    def __init__(self, capacity: int, seq_len: int, obs_dim: int, act_dim: int):
+    def __init__(self, capacity: int, seq_len: int, obs_dim: int, act_dim: int, reward_history_scale: float = 100.0):
         self.capacity = int(capacity)
         self.seq_len = int(seq_len)
         self.obs_dim = int(obs_dim)
         self.act_dim = int(act_dim)
+        self.reward_history_scale = max(float(reward_history_scale), EPS)
         self.episodes: List[Dict[str, np.ndarray]] = []
         self.current: Dict[str, List[np.ndarray]] = self._empty_episode_lists()
         self.size = 0
@@ -195,6 +197,9 @@ class SequenceReplayBuffer:
     def can_sample(self, batch_size: int) -> bool:
         return len(self) >= batch_size and bool(self._candidate_episodes())
 
+    def _reward_history_feature(self, reward: np.ndarray) -> np.ndarray:
+        return np.clip(np.asarray(reward, dtype=np.float32) / self.reward_history_scale, -1.0, 1.0)
+
     def _make_window(self, ep: Dict[str, np.ndarray], t: int):
         start = max(0, t - self.seq_len + 1)
         obs_seq = ep["obs"][start:t + 1]
@@ -206,7 +211,7 @@ class SequenceReplayBuffer:
                 prev_rewards.append(np.zeros(1, dtype=np.float32))
             else:
                 prev_actions.append(ep["action"][j - 1])
-                prev_rewards.append(ep["reward"][j - 1])
+                prev_rewards.append(self._reward_history_feature(ep["reward"][j - 1]))
         prev_actions = np.asarray(prev_actions, dtype=np.float32)
         prev_rewards = np.asarray(prev_rewards, dtype=np.float32)
 
@@ -225,7 +230,7 @@ class SequenceReplayBuffer:
 
         next_obs_seq = np.concatenate([obs_seq[1:], next_obs.reshape(1, self.obs_dim)], axis=0)
         next_prev_actions = np.concatenate([prev_actions[1:], action.reshape(1, self.act_dim)], axis=0)
-        next_prev_rewards = np.concatenate([prev_rewards[1:], reward.reshape(1, 1)], axis=0)
+        next_prev_rewards = np.concatenate([prev_rewards[1:], self._reward_history_feature(reward).reshape(1, 1)], axis=0)
         return obs_seq, prev_actions, prev_rewards, action, reward, next_obs_seq, next_prev_actions, next_prev_rewards, done, cost
 
     def sample(self, batch_size: int, device: torch.device) -> Dict[str, torch.Tensor]:
@@ -233,9 +238,9 @@ class SequenceReplayBuffer:
         lengths = np.array([len(ep["obs"]) for ep in candidates], dtype=np.float64)
         probs = lengths / lengths.sum()
         batch = []
-        for _ in range(batch_size):
-            ep_idx = int(np.random.choice(len(candidates), p=probs))
-            ep = candidates[ep_idx]
+        episode_indices = np.random.choice(len(candidates), size=batch_size, p=probs)
+        for ep_idx in episode_indices:
+            ep = candidates[int(ep_idx)]
             t = int(np.random.randint(0, len(ep["obs"])))
             batch.append(self._make_window(ep, t))
 
@@ -521,6 +526,7 @@ class SequenceGPIDESACAgent:
         self.nu_max = _cfg_get(cfg, "FOCOPS", "nu_max", 10.0, float)
         self.kl_eta = _cfg_get(cfg, "FOCOPS", "eta", 0.02, float)
         self.kl_coef = _cfg_get(cfg, "FOCOPS", "kl_coef", 1.0, float)
+        self.cost_penalty_coef = _cfg_get(cfg, "FOCOPS", "cost_penalty_coef", 1.0, float)
         self.policy_snapshot_interval = _cfg_get(cfg, "FOCOPS", "policy_snapshot_interval", 25, int)
         self.update_count = 0
         self.old_actor = copy.deepcopy(self.actor).to(self.device)
@@ -539,7 +545,9 @@ class SequenceGPIDESACAgent:
             self.c1_opt = self.c2_opt = None
 
         buffer_size = _cfg_get(cfg, "DRL", "buffer_size", 50000, int)
-        self.replay_buffer = SequenceReplayBuffer(buffer_size, self.seq_len, self.obs_dim, self.act_dim)
+        self.reward_history_scale = _cfg_get(cfg, "GPIDE", "reward_history_scale", 100.0, float)
+        self.replay_buffer = SequenceReplayBuffer(
+            buffer_size, self.seq_len, self.obs_dim, self.act_dim, self.reward_history_scale)
         self.history_obs: List[np.ndarray] = []
         self.history_act: List[np.ndarray] = []
         self.history_rew: List[np.ndarray] = []
@@ -548,12 +556,19 @@ class SequenceGPIDESACAgent:
         self.episode_cost = 0.0
         self.episode_len = 0
         self.episode_num = 0
+        self.completed_episodes = 0
+        self.success_episodes = 0
+        self.crash_episodes = 0
+        self.timeout_episodes = 0
+        self.outside_episodes = 0
+        self.latest_episode_summary: Optional[Dict[str, object]] = None
         self.last_stats = TrainStats()
 
         self.safety_shield = _cfg_get(cfg, "safety", "enabled", False, bool)
         self.safety_threshold = _cfg_get(cfg, "safety", "front_obstacle_threshold", 0.65, float)
         self.safety_yaw_bias = _cfg_get(cfg, "safety", "yaw_rate_bias", 0.6, float)
         self.safety_speed_scale = _cfg_get(cfg, "safety", "speed_scale", 0.45, float)
+        self.safety_min_forward_speed = _cfg_get(cfg, "safety", "min_forward_speed", float(self.action_low_np[0]), float)
 
     @property
     def alpha(self):
@@ -582,7 +597,8 @@ class SequenceGPIDESACAgent:
         action_norm = self.normalize_action(action)
         self.history_obs.append(self.vectorizer(new_obs))
         self.history_act.append(action_norm)
-        self.history_rew.append(np.asarray([reward], dtype=np.float32))
+        reward_feature = np.clip(float(reward) / self.reward_history_scale, -1.0, 1.0)
+        self.history_rew.append(np.asarray([reward_feature], dtype=np.float32))
         self.history_obs = self.history_obs[-self.seq_len:]
         self.history_act = self.history_act[-self.seq_len:]
         self.history_rew = self.history_rew[-self.seq_len:]
@@ -629,7 +645,11 @@ class SequenceGPIDESACAgent:
         # depending on map; the sign is configurable by changing yaw_rate_bias).
         turn_sign = -1.0 if left > right else 1.0
         protected = np.asarray(action, dtype=np.float32).copy()
-        protected[0] = max(self.action_low_np[0], protected[0] * self.safety_speed_scale)
+        # Keep moving while turning away from obstacles; otherwise the agent can
+        # discover a conservative crawl/circle behavior that avoids crashes but
+        # never reaches the goal before max_episode_steps.
+        protected[0] = max(self.action_low_np[0], self.safety_min_forward_speed,
+                           protected[0] * self.safety_speed_scale)
         protected[-1] = np.clip(protected[-1] + turn_sign * self.safety_yaw_bias *
                                 float(self.action_high_np[-1]), self.action_low_np[-1], self.action_high_np[-1])
         return protected.astype(np.float32)
@@ -712,7 +732,11 @@ class SequenceGPIDESACAgent:
         if self.focops_enabled:
             c_new = torch.min(self.c1(obs_seq, act_seq, rew_seq, new_action),
                               self.c2(obs_seq, act_seq, rew_seq, new_action))
-            actor_loss = actor_loss + self.nu * c_new.mean()
+            # Keep a baseline cost penalty in addition to the adaptive Lagrange
+            # multiplier.  Otherwise early training starts with nu=0 and the
+            # actor can reinforce fast-but-unsafe trajectories before the
+            # multiplier grows enough to matter.
+            actor_loss = actor_loss + (self.nu + self.cost_penalty_coef) * c_new.mean()
             with torch.no_grad():
                 old_mean, old_log_std = self.old_actor.distribution(obs_seq, act_seq, rew_seq)
             kl = self._gaussian_kl(mean, log_std, old_mean, old_log_std)
@@ -754,28 +778,177 @@ class SequenceGPIDESACAgent:
         self.last_stats = stats
         return stats
 
-    def _write_csv_header(self, csv_path: str):
+    @staticmethod
+    def _info_bool(info: Optional[Dict], key: str) -> bool:
+        return bool(info.get(key, False)) if isinstance(info, dict) else False
+
+    @staticmethod
+    def _info_text(info: Optional[Dict], key: str) -> str:
+        value = info.get(key, "") if isinstance(info, dict) else ""
+        return "" if value is None else str(value)
+
+    def _episode_rates(self) -> Dict[str, float]:
+        denom = max(1, self.completed_episodes)
+        return {
+            "success_rate": self.success_episodes / denom,
+            "crash_rate": self.crash_episodes / denom,
+            "timeout_rate": self.timeout_episodes / denom,
+            "outside_rate": self.outside_episodes / denom,
+        }
+
+    def _episode_summary(self, info: Optional[Dict]) -> Dict[str, object]:
+        reason = self._info_text(info, "done_reason")
+        is_success = reason == "success" or self._info_bool(info, "is_success")
+        is_crash = reason == "crash" or self._info_bool(info, "is_crash")
+        is_outside = reason == "outside" or self._info_bool(info, "is_not_in_workspace")
+        is_timeout = reason in ("timeout", "max_steps") or (
+            (self._info_bool(info, "is_timeout") or self._info_bool(info, "is_max_steps"))
+            and not is_success and not is_crash and not is_outside
+        )
+
+        # Keep the rate buckets mutually exclusive using the environment's done reason
+        # priority: crash/outside/success/max_steps.  Here timeout is a backward-
+        # compatible metric name for the case where the episode reaches the configured max step count without reaching
+        # the target or ending earlier for another terminal reason.
+        if is_crash:
+            reason = "crash"
+            is_success = is_timeout = is_outside = False
+        elif is_outside:
+            reason = "outside"
+            is_success = is_crash = is_timeout = False
+        elif is_success:
+            reason = "success"
+            is_crash = is_timeout = is_outside = False
+        elif is_timeout:
+            reason = "max_steps"
+            is_success = is_crash = is_outside = False
+
+        self.completed_episodes += 1
+        self.success_episodes += int(is_success)
+        self.crash_episodes += int(is_crash)
+        self.timeout_episodes += int(is_timeout)
+        self.outside_episodes += int(is_outside)
+        rates = self._episode_rates()
+        return {
+            "episode": self.episode_num,
+            "total_step": self.total_steps,
+            "episode_len": self.episode_len,
+            "episode_reward": self.episode_reward,
+            "episode_cost": self.episode_cost,
+            "done_reason": reason,
+            "is_success": int(is_success),
+            "is_crash": int(is_crash),
+            "is_timeout": int(is_timeout),
+            "is_max_steps": int(is_timeout),
+            "max_episode_steps": info.get("max_episode_steps", "") if isinstance(info, dict) else "",
+            "is_outside": int(is_outside),
+            **rates,
+        }
+
+    @staticmethod
+    def _write_header(csv_path: str, columns: Sequence[str]):
         if not csv_path or os.path.exists(csv_path):
             return
-        os.makedirs(os.path.dirname(csv_path), exist_ok=True)
+        dirname = os.path.dirname(csv_path)
+        if dirname:
+            os.makedirs(dirname, exist_ok=True)
         with open(csv_path, "w", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            writer.writerow([
-                "total_step", "episode", "episode_step", "reward", "episode_reward", "cost",
-                "episode_cost", "done", "q1_loss", "q2_loss", "actor_loss", "alpha", "nu", "kl"
-            ])
+            csv.writer(f).writerow(columns)
 
-    def _append_csv(self, csv_path: str, reward: float, cost: float, done: bool):
+    def _write_csv_header(self, csv_path: str):
+        self._write_header(csv_path, [
+            "total_step", "episode", "episode_step", "reward", "episode_reward", "cost",
+            "episode_cost", "done", "done_reason", "is_success", "is_crash", "is_timeout",
+            "is_max_steps", "max_episode_steps", "is_outside", "success_rate",
+            "crash_rate", "timeout_rate", "outside_rate", "distance_progress",
+            "progress_penalty", "reverse_progress_penalty", "low_speed_penalty",
+            "q1_loss", "q2_loss", "critic_loss", "actor_loss", "alpha_loss", "cost_loss",
+            "alpha", "nu", "kl"
+        ])
+
+    def _write_episode_csv_header(self, csv_path: str):
+        self._write_header(csv_path, [
+            "episode", "total_step", "episode_len", "episode_reward", "episode_cost",
+            "done_reason", "is_success", "is_crash", "is_timeout", "is_max_steps",
+            "max_episode_steps", "is_outside",
+            "success_rate", "crash_rate", "timeout_rate", "outside_rate",
+            "q1_loss", "q2_loss", "critic_loss", "actor_loss", "alpha_loss", "cost_loss",
+            "alpha", "nu", "kl"
+        ])
+
+    def _append_csv(self, csv_path: str, reward: float, cost: float, done: bool, info: Optional[Dict] = None):
         if not csv_path:
             return
         self._write_csv_header(csv_path)
+        rates = self._episode_rates()
+        q_loss = self.last_stats.q1_loss + self.last_stats.q2_loss
         with open(csv_path, "a", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow([
                 self.total_steps, self.episode_num, self.episode_len, reward, self.episode_reward,
-                cost, self.episode_cost, int(done), self.last_stats.q1_loss, self.last_stats.q2_loss,
-                self.last_stats.actor_loss, self.last_stats.alpha, self.last_stats.nu, self.last_stats.kl,
+                cost, self.episode_cost, int(done), self._info_text(info, "done_reason"),
+                int(self._info_bool(info, "is_success")), int(self._info_bool(info, "is_crash")),
+                int(self._info_bool(info, "is_timeout")), int(self._info_bool(info, "is_max_steps")),
+                info.get("max_episode_steps", "") if isinstance(info, dict) else "",
+                int(self._info_bool(info, "is_not_in_workspace")),
+                rates["success_rate"], rates["crash_rate"], rates["timeout_rate"], rates["outside_rate"],
+                info.get("distance_progress", "") if isinstance(info, dict) else "",
+                info.get("progress_penalty", "") if isinstance(info, dict) else "",
+                info.get("reverse_progress_penalty", "") if isinstance(info, dict) else "",
+                info.get("low_speed_penalty", "") if isinstance(info, dict) else "",
+                self.last_stats.q1_loss, self.last_stats.q2_loss, q_loss, self.last_stats.actor_loss,
+                self.last_stats.alpha_loss, self.last_stats.cost_loss, self.last_stats.alpha,
+                self.last_stats.nu, self.last_stats.kl,
             ])
+
+    def _append_episode_csv(self, csv_path: str, summary: Dict[str, object]):
+        if not csv_path:
+            return
+        self._write_episode_csv_header(csv_path)
+        q_loss = self.last_stats.q1_loss + self.last_stats.q2_loss
+        with open(csv_path, "a", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                summary["episode"], summary["total_step"], summary["episode_len"],
+                summary["episode_reward"], summary["episode_cost"], summary["done_reason"],
+                summary["is_success"], summary["is_crash"], summary["is_timeout"], summary["is_max_steps"],
+                summary["max_episode_steps"], summary["is_outside"],
+                summary["success_rate"], summary["crash_rate"], summary["timeout_rate"], summary["outside_rate"],
+                self.last_stats.q1_loss, self.last_stats.q2_loss, q_loss, self.last_stats.actor_loss,
+                self.last_stats.alpha_loss, self.last_stats.cost_loss, self.last_stats.alpha,
+                self.last_stats.nu, self.last_stats.kl,
+            ])
+
+    def _write_metrics_json(self, json_path: str, latest_episode: Optional[Dict[str, object]] = None):
+        if not json_path:
+            return
+        dirname = os.path.dirname(json_path)
+        if dirname:
+            os.makedirs(dirname, exist_ok=True)
+        payload = {
+            "total_step": self.total_steps,
+            "completed_episodes": self.completed_episodes,
+            "success_episodes": self.success_episodes,
+            "crash_episodes": self.crash_episodes,
+            "timeout_episodes": self.timeout_episodes,
+            "outside_episodes": self.outside_episodes,
+            **self._episode_rates(),
+            "last_stats": {
+                "q1_loss": self.last_stats.q1_loss,
+                "q2_loss": self.last_stats.q2_loss,
+                "critic_loss": self.last_stats.q1_loss + self.last_stats.q2_loss,
+                "actor_loss": self.last_stats.actor_loss,
+                "alpha_loss": self.last_stats.alpha_loss,
+                "cost_loss": self.last_stats.cost_loss,
+                "alpha": self.last_stats.alpha,
+                "nu": self.last_stats.nu,
+                "cost_penalty_coef": self.cost_penalty_coef,
+                "kl": self.last_stats.kl,
+            },
+            "latest_episode": latest_episode,
+        }
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
 
     def learn(
         self,
@@ -786,6 +959,8 @@ class SequenceGPIDESACAgent:
         tensorboard_log: Optional[str] = None,
         max_episodes: int = 0,
         min_ent_coef: float = 0.0,
+        episode_csv_path: Optional[str] = None,
+        metrics_json_path: Optional[str] = None,
     ):
         del tensorboard_log, min_ent_coef  # kept for call compatibility
         os.makedirs(checkpoint_dir, exist_ok=True) if checkpoint_dir else None
@@ -796,7 +971,15 @@ class SequenceGPIDESACAgent:
         self.episode_cost = 0.0
         self.episode_len = 0
         self.episode_num = 1
+        self.completed_episodes = 0
+        self.success_episodes = 0
+        self.crash_episodes = 0
+        self.timeout_episodes = 0
+        self.outside_episodes = 0
+        self.latest_episode_summary = None
         self._write_csv_header(csv_path) if csv_path else None
+        self._write_episode_csv_header(episode_csv_path) if episode_csv_path else None
+        self._write_metrics_json(metrics_json_path) if metrics_json_path else None
 
         for step in range(1, int(total_timesteps) + 1):
             self.total_steps = step
@@ -822,15 +1005,25 @@ class SequenceGPIDESACAgent:
                     if self.replay_buffer.can_sample(self.batch_size):
                         self.update_parameters()
 
-            self._append_csv(csv_path, float(reward), cost, bool(done)) if csv_path else None
+            episode_summary = None
+            if done:
+                episode_summary = self._episode_summary(info)
+                self.latest_episode_summary = episode_summary
+                self._append_episode_csv(episode_csv_path, episode_summary) if episode_csv_path else None
+                self._write_metrics_json(metrics_json_path, episode_summary) if metrics_json_path else None
+
+            self._append_csv(csv_path, float(reward), cost, bool(done), info) if csv_path else None
 
             if checkpoint_dir and checkpoint_interval > 0 and step % checkpoint_interval == 0:
                 self.save(os.path.join(checkpoint_dir, f"gpide_ckpt_{step}.pt"), total_step=step)
 
             if done:
                 print(
-                    "[GPIDE-SAC] episode={} len={} reward={:.3f} cost={:.3f} info={}".format(
-                        self.episode_num, self.episode_len, self.episode_reward, self.episode_cost, info
+                    "[GPIDE-SAC] episode={} len={} reward={:.3f} cost={:.3f} "
+                    "success_rate={:.3f} crash_rate={:.3f} timeout_rate={:.3f} info={}".format(
+                        self.episode_num, self.episode_len, self.episode_reward, self.episode_cost,
+                        episode_summary["success_rate"], episode_summary["crash_rate"],
+                        episode_summary["timeout_rate"], info
                     ),
                     flush=True,
                 )
@@ -846,6 +1039,7 @@ class SequenceGPIDESACAgent:
             else:
                 obs = next_obs
                 obs_vec = next_obs_vec
+        self._write_metrics_json(metrics_json_path, self.latest_episode_summary) if metrics_json_path else None
         return self
 
     def save(self, path: str, total_step: Optional[int] = None):
@@ -865,6 +1059,17 @@ class SequenceGPIDESACAgent:
             "total_step": total_step if total_step is not None else self.total_steps,
             "obs_dim": self.obs_dim,
             "act_dim": self.act_dim,
+            "cost_penalty_coef": self.cost_penalty_coef,
+            "reward_history_scale": self.reward_history_scale,
+            "training_metrics": {
+                "completed_episodes": self.completed_episodes,
+                "success_episodes": self.success_episodes,
+                "crash_episodes": self.crash_episodes,
+                "timeout_episodes": self.timeout_episodes,
+                "outside_episodes": self.outside_episodes,
+                **self._episode_rates(),
+                "latest_episode": self.latest_episode_summary,
+            },
         }
         if self.focops_enabled:
             payload.update({
