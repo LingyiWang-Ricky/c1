@@ -61,7 +61,7 @@ class FixedwingDynamicsSimple():
 
     def reset(self):
 
-        if self.env_name == 'City_400':
+        if self.env_name in ('City_400', 'City_400_400'):
             self.update_start_goal_rect(size=200)
         if self.env_name == 'Tree_200':
             self.update_start_goal_rect(size=80)

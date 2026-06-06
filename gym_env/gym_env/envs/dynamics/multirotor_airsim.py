@@ -20,8 +20,15 @@ class MultirotorDynamicsAirsim():
         # AirSim Client
         self.client = airsim.MultirotorClient()
         self.client.confirmConnection()
-        self.client.enableApiControl(True)
-        self.client.armDisarm(True)
+        try:
+            self.client.enableApiControl(True)
+            self.client.armDisarm(True)
+        except Exception as exc:
+            raise RuntimeError(
+                "AirSim vehicle API is not available for dynamic_name=Multirotor. "
+                "Start AirSim with SimMode=Multirotor and a valid vehicle, or use "
+                "dynamic_name=SimpleMultirotor with ComputerVision/simple-dynamics settings."
+            ) from exc
 
         # start and goal position
         self.start_position = [0, 0, 0]
@@ -177,7 +184,6 @@ class MultirotorDynamicsAirsim():
         random_angle = random_angle_set
         noise = np.random.random()
         angle = random_angle * noise - math.pi   # -pi~pi
-        rect = [-128, -128, 128, 128]
         # goal_x = 100*math.sin(angle)
         # goal_y = 100*math.cos(angle)
 
