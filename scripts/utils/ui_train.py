@@ -454,7 +454,7 @@ class TrainingUi(QWidget):
             self.background_img.setRect(pg.QtCore.QRectF(-135, -135, 270, 270))
             self.traj_pw.setXRange(max=135, min=-135)
             self.traj_pw.setYRange(max=135, min=-135)
-        elif self.cfg.get('options', 'env_name') == 'City_400':
+        elif self.cfg.get('options', 'env_name') in ('City_400', 'City_400_400'):
             background_image_path = self.resource_path(
                 'resources', 'env_maps', 'city_400.png')
             img_data = Image.open(background_image_path)
@@ -507,7 +507,7 @@ class TrainingUi(QWidget):
 
         # set background image
         background_list = ['SimpleAvoid', 'NH_center',
-                           'City_400', 'Tree_200', 'Forest']
+                           'City_400', 'City_400_400', 'Tree_200', 'Forest']
         if self.cfg.get('options', 'env_name') in background_list:
             self.traj_pw.addItem(self.background_img)
 
