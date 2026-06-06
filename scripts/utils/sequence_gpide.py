@@ -569,6 +569,7 @@ class SequenceGPIDESACAgent:
         self.safety_yaw_bias = _cfg_get(cfg, "safety", "yaw_rate_bias", 0.6, float)
         self.safety_speed_scale = _cfg_get(cfg, "safety", "speed_scale", 0.45, float)
         self.safety_min_forward_speed = _cfg_get(cfg, "safety", "min_forward_speed", float(self.action_low_np[0]), float)
+        self.safety_goal_turn_bias = _cfg_get(cfg, "safety", "goal_turn_bias", 0.35, float)
 
     @property
     def alpha(self):
@@ -641,9 +642,22 @@ class SequenceGPIDESACAgent:
             return action
         left = float(depth_feats[:center_idx].max()) if center_idx > 0 else 0.0
         right = float(depth_feats[center_idx + 1:].max()) if center_idx + 1 < len(depth_feats) else 0.0
-        # In image coordinates, obstacle on left -> turn right (positive yaw in this setup often means left/right
-        # depending on map; the sign is configurable by changing yaw_rate_bias).
-        turn_sign = -1.0 if left > right else 1.0
+        # In image coordinates, obstacle on left -> turn right.  When both sides
+        # are similarly occupied, bias the shield toward the goal yaw encoded in
+        # the state features so avoidance does not systematically drive the UAV
+        # away from the target or out of bounds.
+        obstacle_turn = -1.0 if left > right else 1.0
+        turn_sign = obstacle_turn
+        yaw_feature_idx = self.vectorizer.depth_splits + 1
+        if len(obs_vec) > yaw_feature_idx:
+            relative_yaw_norm = float(np.clip(obs_vec[yaw_feature_idx], 0.0, 1.0))
+            relative_yaw = (relative_yaw_norm - 0.5) * 2.0
+            goal_turn = float(np.sign(relative_yaw)) if abs(relative_yaw) > 0.05 else 0.0
+            obstacle_balance = abs(left - right)
+            goal_weight = self.safety_goal_turn_bias * max(0.0, 1.0 - obstacle_balance)
+            blended_turn = (1.0 - goal_weight) * obstacle_turn + goal_weight * goal_turn
+            if abs(blended_turn) > 1e-6:
+                turn_sign = float(np.sign(blended_turn))
         protected = np.asarray(action, dtype=np.float32).copy()
         # Keep moving while turning away from obstacles; otherwise the agent can
         # discover a conservative crawl/circle behavior that avoids crashes but
@@ -862,6 +876,8 @@ class SequenceGPIDESACAgent:
             "is_max_steps", "max_episode_steps", "is_outside", "success_rate",
             "crash_rate", "timeout_rate", "outside_rate", "distance_progress",
             "progress_penalty", "reverse_progress_penalty", "low_speed_penalty",
+            "heading_alignment", "heading_reward", "heading_error_penalty",
+            "boundary_margin", "boundary_cost", "boundary_penalty", "path_distance", "path_penalty",
             "q1_loss", "q2_loss", "critic_loss", "actor_loss", "alpha_loss", "cost_loss",
             "alpha", "nu", "kl"
         ])
@@ -896,6 +912,14 @@ class SequenceGPIDESACAgent:
                 info.get("progress_penalty", "") if isinstance(info, dict) else "",
                 info.get("reverse_progress_penalty", "") if isinstance(info, dict) else "",
                 info.get("low_speed_penalty", "") if isinstance(info, dict) else "",
+                info.get("heading_alignment", "") if isinstance(info, dict) else "",
+                info.get("heading_reward", "") if isinstance(info, dict) else "",
+                info.get("heading_error_penalty", "") if isinstance(info, dict) else "",
+                info.get("boundary_margin", "") if isinstance(info, dict) else "",
+                info.get("boundary_cost", "") if isinstance(info, dict) else "",
+                info.get("boundary_penalty", "") if isinstance(info, dict) else "",
+                info.get("path_distance", "") if isinstance(info, dict) else "",
+                info.get("path_penalty", "") if isinstance(info, dict) else "",
                 self.last_stats.q1_loss, self.last_stats.q2_loss, q_loss, self.last_stats.actor_loss,
                 self.last_stats.alpha_loss, self.last_stats.cost_loss, self.last_stats.alpha,
                 self.last_stats.nu, self.last_stats.kl,

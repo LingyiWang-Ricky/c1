@@ -594,6 +594,11 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
         reverse_progress_penalty_coef = self._cfg_getfloat('reward', 'reverse_progress_penalty_coef', 0.0)
         min_forward_speed = self._cfg_getfloat('reward', 'min_forward_speed', 0.0)
         low_speed_penalty_coef = self._cfg_getfloat('reward', 'low_speed_penalty_coef', 0.0)
+        heading_alignment_coef = self._cfg_getfloat('reward', 'heading_alignment_coef', 0.0)
+        heading_error_penalty_coef = self._cfg_getfloat('reward', 'heading_error_penalty_coef', 0.0)
+        boundary_penalty_coef = self._cfg_getfloat('reward', 'boundary_penalty_coef', 0.0)
+        boundary_safe_margin = self._cfg_getfloat('reward', 'boundary_safe_margin', 5.0)
+        path_penalty_coef = self._cfg_getfloat('reward', 'path_penalty_coef', 0.0)
 
         if not done:
             # 1 - goal reward.  Also penalize no-progress steps so a policy cannot
@@ -641,14 +646,23 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
 
             yaw_error = self.dynamic_model.state_raw[2]
             yaw_error_cost = abs(yaw_error / 90)
+            heading_alignment = max(0.0, math.cos(math.radians(yaw_error)))
+            heading_reward = heading_alignment_coef * heading_alignment
+            heading_error_penalty = heading_error_penalty_coef * abs(yaw_error / 180.0)
             progress_penalty = no_progress_penalty if distance_progress < progress_epsilon else 0.0
             reverse_progress_penalty = reverse_progress_penalty_coef * max(0.0, -distance_progress)
             forward_speed = float(action[0]) if len(np.asarray(action).reshape(-1)) > 0 else 0.0
             low_speed_penalty = low_speed_penalty_coef * max(0.0, min_forward_speed - forward_speed)
+            boundary_margin = self.get_workspace_margin()
+            boundary_cost = 1.0 - np.clip(boundary_margin / max(boundary_safe_margin, 1e-6), 0.0, 1.0)
+            boundary_penalty = boundary_penalty_coef * boundary_cost
+            path_distance = self.getDis(x, y, self.dynamic_model.start_position[0], self.dynamic_model.start_position[1], x_g, y_g)
+            path_penalty = path_penalty_coef * np.clip(path_distance / 10.0, 0.0, 1.0)
 
-            reward = reward_distance - pose_penalty_coef * punishment_pose - obstacle_penalty_coef * \
+            reward = reward_distance + heading_reward - pose_penalty_coef * punishment_pose - obstacle_penalty_coef * \
                 punishment_obs - action_penalty_coef * punishment_action - yaw_penalty_coef * yaw_error_cost - \
-                step_penalty - progress_penalty - reverse_progress_penalty - low_speed_penalty
+                step_penalty - progress_penalty - reverse_progress_penalty - low_speed_penalty - \
+                heading_error_penalty - boundary_penalty - path_penalty
 
             if isinstance(getattr(self, '_current_step_info', None), dict):
                 self._current_step_info.update({
@@ -656,6 +670,14 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
                     'progress_penalty': float(progress_penalty),
                     'reverse_progress_penalty': float(reverse_progress_penalty),
                     'low_speed_penalty': float(low_speed_penalty),
+                    'heading_alignment': float(heading_alignment),
+                    'heading_reward': float(heading_reward),
+                    'heading_error_penalty': float(heading_error_penalty),
+                    'boundary_margin': float(boundary_margin),
+                    'boundary_cost': float(boundary_cost),
+                    'boundary_penalty': float(boundary_penalty),
+                    'path_distance': float(path_distance),
+                    'path_penalty': float(path_penalty),
                 })
         else:
             terminal_info = getattr(self, '_current_step_info', None) or self.get_done_info()
@@ -994,6 +1016,8 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
         max_steps_cost = self._cfg_getfloat('constraint', 'max_steps_cost', 0.3)
         action_cost_coef = self._cfg_getfloat('constraint', 'action_cost_coef', 0.05)
         yaw_cost_coef = self._cfg_getfloat('constraint', 'yaw_cost_coef', 0.05)
+        boundary_safe_margin = self._cfg_getfloat('constraint', 'boundary_safe_margin', 5.0)
+        boundary_cost_coef = self._cfg_getfloat('constraint', 'boundary_cost_coef', 0.3)
 
         distance_margin = max(safe_distance - self.crash_distance, 1e-6)
         min_distance = float(getattr(self, 'min_distance_to_obstacles', safe_distance))
@@ -1019,6 +1043,8 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
         if hasattr(self.dynamic_model, 'state_raw') and len(self.dynamic_model.state_raw) > 2:
             yaw_error = float(abs(self.dynamic_model.state_raw[2]) / 180.0)
         yaw_error_cost = float(np.clip(yaw_error, 0.0, 1.0))
+        boundary_margin = self.get_workspace_margin()
+        boundary_cost = float(1.0 - np.clip(boundary_margin / max(boundary_safe_margin, 1e-6), 0.0, 1.0))
 
         terminal_cost = 0.0
         if info.get('is_crash'):
@@ -1031,14 +1057,19 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
 
         constraint_cost = max(
             terminal_cost,
-            float(obstacle_cost) + action_cost_coef * action_cost + yaw_cost_coef * yaw_error_cost,
+            float(obstacle_cost) + action_cost_coef * action_cost + yaw_cost_coef * yaw_error_cost +
+            boundary_cost_coef * boundary_cost,
         )
         info.update({
             'constraint_cost': float(np.clip(constraint_cost, 0.0, max(1.0, crash_cost))),
             'obstacle_cost': float(np.clip(obstacle_cost, 0.0, max(1.0, crash_cost))),
             'action_cost': action_cost,
             'yaw_error_cost': yaw_error_cost,
+            'boundary_margin': float(boundary_margin),
+            'boundary_cost': boundary_cost,
             'distance_to_goal': float(self.dynamic_model.goal_distance),
+            'current_distance_to_goal': float(self.get_distance_to_goal_3d()),
+            'relative_yaw_deg': float(self.dynamic_model.state_raw[2]) if hasattr(self.dynamic_model, 'state_raw') and len(self.dynamic_model.state_raw) > 2 else 0.0,
             'min_distance_to_obstacles': min_distance,
         })
 
@@ -1047,6 +1078,18 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
             return self.cfg.getfloat(section, option)
         except (NoOptionError, NoSectionError, ValueError):
             return default
+
+    def get_workspace_margin(self):
+        current_position = self.dynamic_model.get_position()
+        margins = [
+            current_position[0] - self.work_space_x[0],
+            self.work_space_x[1] - current_position[0],
+            current_position[1] - self.work_space_y[0],
+            self.work_space_y[1] - current_position[1],
+            current_position[2] - self.work_space_z[0],
+            self.work_space_z[1] - current_position[2],
+        ]
+        return float(min(margins))
 
     def is_not_inside_workspace(self):
         """
