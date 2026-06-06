@@ -45,6 +45,7 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
         self.dynamic_name = cfg.get('options', 'dynamic_name')
         self.keyboard_debug = cfg.getboolean('options', 'keyboard_debug')
         self.generate_q_map = cfg.getboolean('options', 'generate_q_map')
+        self.print_train_info = cfg.getboolean('options', 'print_train_info', fallback=True)
         self.perception_type = cfg.get('options', 'perception')
 
         # create LGMD agent
@@ -189,6 +190,9 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
         self.max_depth_meters = cfg.getint('environment', 'max_depth_meters')
         self.screen_height = cfg.getint('environment', 'screen_height')
         self.screen_width = cfg.getint('environment', 'screen_width')
+        self.image_retry_count = cfg.getint('environment', 'image_retry_count', fallback=3)
+        self.last_depth_image = None
+        self.last_gray_image = None
 
         self.trajectory_list = []
 
@@ -246,6 +250,7 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
         info = self.get_done_info()
         done = info['done']
         self._current_step_info = info
+        self._add_constraint_info(info, action)
         if done:
             print(info)
 
@@ -267,7 +272,8 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
         self.cumulated_episode_reward += reward
 
         # ----------------print info---------------------------
-        self.print_train_info_airsim(action, obs, reward, info)
+        if self.print_train_info:
+            self.print_train_info_airsim(action, obs, reward, info)
 
         if self.cfg.get('options', 'dynamic_name') == 'SimpleFixedwing':
             self.set_pyqt_signal_fixedwing(action, reward, done)
@@ -351,57 +357,93 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
 
         return image_with_state
 
+    @staticmethod
+    def _valid_image_response(response):
+        return response is not None and response.width > 0 and response.height > 0
+
+    def _sim_get_images_with_retry(self, requests, min_responses=1):
+        """Call AirSim image API with bounded retries.
+
+        AirSim can occasionally return empty images or raise an RPCError such as
+        ``bad cast`` during long training runs.  Keep the request payload as a
+        list on every attempt and return ``None`` after the configured retry
+        budget so callers can fall back to the last valid frame instead of
+        crashing the trainer.
+        """
+        attempts = max(1, int(getattr(self, 'image_retry_count', 3)))
+        last_error = None
+        for attempt in range(attempts):
+            try:
+                responses = self.client.simGetImages(requests)
+            except Exception as exc:
+                last_error = exc
+                responses = None
+
+            if responses and len(responses) >= min_responses and self._valid_image_response(responses[0]):
+                return responses
+            print("get_image_fail... attempt {}/{}".format(attempt + 1, attempts))
+
+        if last_error is not None:
+            print("get_image_fail fallback after AirSim RPC error: {}".format(last_error))
+        return None
+
+    def _fallback_depth_image(self):
+        if self.last_depth_image is not None:
+            return self.last_depth_image.copy()
+        return np.full((self.screen_height, self.screen_width), self.max_depth_meters, dtype=np.float32)
+
+    def _fallback_gray_image(self):
+        if self.last_gray_image is not None:
+            return self.last_gray_image.copy()
+        return np.zeros((self.screen_height, self.screen_width), dtype=np.uint8)
+
     def get_depth_gray_image(self):
         # get depth and rgb image
         # scene vision image in png format
-        responses = self.client.simGetImages([
+        requests = [
             airsim.ImageRequest("0", airsim.ImageType.DepthVis, True),
             airsim.ImageRequest("0", airsim.ImageType.Scene, False, False),
-        ])
+        ]
+        responses = self._sim_get_images_with_retry(requests, min_responses=2)
+        if responses is None or not self._valid_image_response(responses[1]):
+            return self._fallback_depth_image(), self._fallback_gray_image()
 
-        # check observation
-        while responses[0].width == 0:
-            print("get_image_fail...")
-            responses = self.client.simGetImages([
-                airsim.ImageRequest("0", airsim.ImageType.DepthVis, True),
-                airsim.ImageRequest("0", airsim.ImageType.Scene, False, False),
-            ])
+        try:
+            # get depth image
+            depth_img = airsim.list_to_2d_float_array(
+                responses[0].image_data_float,
+                responses[0].width, responses[0].height)
+            depth_meter = (depth_img * 100).astype(np.float32)
 
-        # get depth image
-        depth_img = airsim.list_to_2d_float_array(
-            responses[0].image_data_float,
-            responses[0].width, responses[0].height)
-        depth_meter = depth_img * 100
+            # get gray image
+            img_1d = np.frombuffer(responses[1].image_data_uint8, dtype=np.uint8)
+            # reshape array to 3 channel image array H X W X 3
+            img_rgb = img_1d.reshape(responses[1].height, responses[1].width, 3)
+            img_gray = cv2.cvtColor(img_rgb, cv2.COLOR_BGR2GRAY)
+        except Exception as exc:
+            print("get_image_fail fallback after image decode error: {}".format(exc))
+            return self._fallback_depth_image(), self._fallback_gray_image()
 
-        # get gary image
-        img_1d = np.fromstring(responses[1].image_data_uint8, dtype=np.uint8)
-        # reshape array to 4 channel image array H X W X 3
-        img_rgb = img_1d.reshape(responses[1].height, responses[1].width, 3)
-        img_gray = cv2.cvtColor(img_rgb, cv2.COLOR_BGR2GRAY)
-
-        # cv2.imshow('test', img_rgb)
-        # cv2.waitKey(1)
-
+        self.last_depth_image = depth_meter.copy()
+        self.last_gray_image = img_gray.copy()
         return depth_meter, img_gray
 
     def get_depth_image(self):
+        requests = [airsim.ImageRequest("0", airsim.ImageType.DepthVis, True)]
+        responses = self._sim_get_images_with_retry(requests, min_responses=1)
+        if responses is None:
+            return self._fallback_depth_image()
 
-        responses = self.client.simGetImages([
-            airsim.ImageRequest("0", airsim.ImageType.DepthVis, True)
-        ])
+        try:
+            depth_img = airsim.list_to_2d_float_array(
+                responses[0].image_data_float, responses[0].width,
+                responses[0].height)
+            depth_meter = (depth_img * 100).astype(np.float32)
+        except Exception as exc:
+            print("get_image_fail fallback after depth decode error: {}".format(exc))
+            return self._fallback_depth_image()
 
-        # check observation
-        while responses[0].width == 0:
-            print("get_image_fail...")
-            responses = self.client.simGetImages(
-                airsim.ImageRequest("0", airsim.ImageType.DepthVis, True))
-
-        depth_img = airsim.list_to_2d_float_array(
-            responses[0].image_data_float, responses[0].width,
-            responses[0].height)
-
-        depth_meter = depth_img * 100
-
+        self.last_depth_image = depth_meter.copy()
         return depth_meter
 
     def get_obs_vector(self):
@@ -907,6 +949,63 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
             'step_num': self.step_num + 1
         }
 
+    def _add_constraint_info(self, info, action):
+        """Attach safety costs used by GPIDE/FOCOPS sequence SAC.
+
+        The sequence agent reads ``info['constraint_cost']`` as the cost target
+        for its FOCOPS-inspired cost critics.  Keep this independent from the
+        scalar reward so reward shaping and safety constraints can be tuned
+        separately.  Crash receives a terminal cost even if the obstacle distance
+        was not measurable on that step.
+        """
+        if info is None:
+            return
+
+        safe_distance = self._cfg_getfloat('constraint', 'safe_distance', self.crash_distance + 3.0)
+        crash_cost = self._cfg_getfloat('constraint', 'crash_cost', 1.0)
+        outside_cost = self._cfg_getfloat('constraint', 'outside_cost', 0.5)
+        action_cost_coef = self._cfg_getfloat('constraint', 'action_cost_coef', 0.05)
+        yaw_cost_coef = self._cfg_getfloat('constraint', 'yaw_cost_coef', 0.05)
+
+        distance_margin = max(safe_distance - self.crash_distance, 1e-6)
+        min_distance = float(getattr(self, 'min_distance_to_obstacles', safe_distance))
+        if np.isfinite(min_distance):
+            obstacle_cost = 1.0 - np.clip((min_distance - self.crash_distance) / distance_margin, 0.0, 1.0)
+        else:
+            obstacle_cost = 0.0
+
+        action_arr = np.asarray(action, dtype=np.float32).reshape(-1)
+        if action_arr.size:
+            action_span = np.maximum(np.asarray(self.action_space.high, dtype=np.float32).reshape(-1), 1e-6)
+            action_cost = float(np.clip(np.mean(np.abs(action_arr) / action_span), 0.0, 1.0))
+        else:
+            action_cost = 0.0
+
+        yaw_error = 0.0
+        if hasattr(self.dynamic_model, 'state_raw') and len(self.dynamic_model.state_raw) > 2:
+            yaw_error = float(abs(self.dynamic_model.state_raw[2]) / 180.0)
+        yaw_error_cost = float(np.clip(yaw_error, 0.0, 1.0))
+
+        terminal_cost = 0.0
+        if info.get('is_crash'):
+            terminal_cost = crash_cost
+            obstacle_cost = max(float(obstacle_cost), crash_cost)
+        elif info.get('is_not_in_workspace'):
+            terminal_cost = outside_cost
+
+        constraint_cost = max(
+            terminal_cost,
+            float(obstacle_cost) + action_cost_coef * action_cost + yaw_cost_coef * yaw_error_cost,
+        )
+        info.update({
+            'constraint_cost': float(np.clip(constraint_cost, 0.0, max(1.0, crash_cost))),
+            'obstacle_cost': float(np.clip(obstacle_cost, 0.0, max(1.0, crash_cost))),
+            'action_cost': action_cost,
+            'yaw_error_cost': yaw_error_cost,
+            'distance_to_goal': float(self.dynamic_model.goal_distance),
+            'min_distance_to_obstacles': min_distance,
+        })
+
     def _cfg_getfloat(self, section, option, default):
         try:
             return self.cfg.getfloat(section, option)
@@ -966,6 +1065,8 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
 # ! -----------used for plot or show states------------------------------------------------------------------
 
     def print_train_info_airsim(self, action, obs, reward, info):
+        if not self.print_train_info:
+            return
         # if self.perception_type == 'split' or self.perception_type == 'lgmd':
         #     feature_all = self.feature_all
         # elif self.perception_type == 'vector':
