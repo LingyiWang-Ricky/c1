@@ -139,11 +139,12 @@ class ObservationVectorizer:
 class SequenceReplayBuffer:
     """Episode-aware replay buffer that samples fixed-length history windows."""
 
-    def __init__(self, capacity: int, seq_len: int, obs_dim: int, act_dim: int):
+    def __init__(self, capacity: int, seq_len: int, obs_dim: int, act_dim: int, reward_history_scale: float = 100.0):
         self.capacity = int(capacity)
         self.seq_len = int(seq_len)
         self.obs_dim = int(obs_dim)
         self.act_dim = int(act_dim)
+        self.reward_history_scale = max(float(reward_history_scale), EPS)
         self.episodes: List[Dict[str, np.ndarray]] = []
         self.current: Dict[str, List[np.ndarray]] = self._empty_episode_lists()
         self.size = 0
@@ -196,6 +197,9 @@ class SequenceReplayBuffer:
     def can_sample(self, batch_size: int) -> bool:
         return len(self) >= batch_size and bool(self._candidate_episodes())
 
+    def _reward_history_feature(self, reward: np.ndarray) -> np.ndarray:
+        return np.clip(np.asarray(reward, dtype=np.float32) / self.reward_history_scale, -1.0, 1.0)
+
     def _make_window(self, ep: Dict[str, np.ndarray], t: int):
         start = max(0, t - self.seq_len + 1)
         obs_seq = ep["obs"][start:t + 1]
@@ -207,7 +211,7 @@ class SequenceReplayBuffer:
                 prev_rewards.append(np.zeros(1, dtype=np.float32))
             else:
                 prev_actions.append(ep["action"][j - 1])
-                prev_rewards.append(ep["reward"][j - 1])
+                prev_rewards.append(self._reward_history_feature(ep["reward"][j - 1]))
         prev_actions = np.asarray(prev_actions, dtype=np.float32)
         prev_rewards = np.asarray(prev_rewards, dtype=np.float32)
 
@@ -226,7 +230,7 @@ class SequenceReplayBuffer:
 
         next_obs_seq = np.concatenate([obs_seq[1:], next_obs.reshape(1, self.obs_dim)], axis=0)
         next_prev_actions = np.concatenate([prev_actions[1:], action.reshape(1, self.act_dim)], axis=0)
-        next_prev_rewards = np.concatenate([prev_rewards[1:], reward.reshape(1, 1)], axis=0)
+        next_prev_rewards = np.concatenate([prev_rewards[1:], self._reward_history_feature(reward).reshape(1, 1)], axis=0)
         return obs_seq, prev_actions, prev_rewards, action, reward, next_obs_seq, next_prev_actions, next_prev_rewards, done, cost
 
     def sample(self, batch_size: int, device: torch.device) -> Dict[str, torch.Tensor]:
@@ -522,6 +526,7 @@ class SequenceGPIDESACAgent:
         self.nu_max = _cfg_get(cfg, "FOCOPS", "nu_max", 10.0, float)
         self.kl_eta = _cfg_get(cfg, "FOCOPS", "eta", 0.02, float)
         self.kl_coef = _cfg_get(cfg, "FOCOPS", "kl_coef", 1.0, float)
+        self.cost_penalty_coef = _cfg_get(cfg, "FOCOPS", "cost_penalty_coef", 1.0, float)
         self.policy_snapshot_interval = _cfg_get(cfg, "FOCOPS", "policy_snapshot_interval", 25, int)
         self.update_count = 0
         self.old_actor = copy.deepcopy(self.actor).to(self.device)
@@ -540,7 +545,9 @@ class SequenceGPIDESACAgent:
             self.c1_opt = self.c2_opt = None
 
         buffer_size = _cfg_get(cfg, "DRL", "buffer_size", 50000, int)
-        self.replay_buffer = SequenceReplayBuffer(buffer_size, self.seq_len, self.obs_dim, self.act_dim)
+        self.reward_history_scale = _cfg_get(cfg, "GPIDE", "reward_history_scale", 100.0, float)
+        self.replay_buffer = SequenceReplayBuffer(
+            buffer_size, self.seq_len, self.obs_dim, self.act_dim, self.reward_history_scale)
         self.history_obs: List[np.ndarray] = []
         self.history_act: List[np.ndarray] = []
         self.history_rew: List[np.ndarray] = []
@@ -589,7 +596,8 @@ class SequenceGPIDESACAgent:
         action_norm = self.normalize_action(action)
         self.history_obs.append(self.vectorizer(new_obs))
         self.history_act.append(action_norm)
-        self.history_rew.append(np.asarray([reward], dtype=np.float32))
+        reward_feature = np.clip(float(reward) / self.reward_history_scale, -1.0, 1.0)
+        self.history_rew.append(np.asarray([reward_feature], dtype=np.float32))
         self.history_obs = self.history_obs[-self.seq_len:]
         self.history_act = self.history_act[-self.seq_len:]
         self.history_rew = self.history_rew[-self.seq_len:]
@@ -719,7 +727,11 @@ class SequenceGPIDESACAgent:
         if self.focops_enabled:
             c_new = torch.min(self.c1(obs_seq, act_seq, rew_seq, new_action),
                               self.c2(obs_seq, act_seq, rew_seq, new_action))
-            actor_loss = actor_loss + self.nu * c_new.mean()
+            # Keep a baseline cost penalty in addition to the adaptive Lagrange
+            # multiplier.  Otherwise early training starts with nu=0 and the
+            # actor can reinforce fast-but-unsafe trajectories before the
+            # multiplier grows enough to matter.
+            actor_loss = actor_loss + (self.nu + self.cost_penalty_coef) * c_new.mean()
             with torch.no_grad():
                 old_mean, old_log_std = self.old_actor.distribution(obs_seq, act_seq, rew_seq)
             kl = self._gaussian_kl(mean, log_std, old_mean, old_log_std)
@@ -912,6 +924,7 @@ class SequenceGPIDESACAgent:
                 "cost_loss": self.last_stats.cost_loss,
                 "alpha": self.last_stats.alpha,
                 "nu": self.last_stats.nu,
+                "cost_penalty_coef": self.cost_penalty_coef,
                 "kl": self.last_stats.kl,
             },
             "latest_episode": latest_episode,
@@ -1028,6 +1041,8 @@ class SequenceGPIDESACAgent:
             "total_step": total_step if total_step is not None else self.total_steps,
             "obs_dim": self.obs_dim,
             "act_dim": self.act_dim,
+            "cost_penalty_coef": self.cost_penalty_coef,
+            "reward_history_scale": self.reward_history_scale,
             "training_metrics": {
                 "completed_episodes": self.completed_episodes,
                 "success_episodes": self.success_episodes,
