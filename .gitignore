@@ -1,0 +1,16 @@
+logs/
+*.npy
+*.npz
+*.pt
+*.pth
+*.pkl
+*.ckpt
+__pycache__/
+*.pyc
+logs/
+__pycache__/
+*.pyc
+*.pt
+*.pth
+*.ckpt
+
