@@ -588,11 +588,19 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
         obstacle_penalty_coef = self._cfg_getfloat('reward', 'obstacle_penalty_coef', 0.2)
         action_penalty_coef = self._cfg_getfloat('reward', 'action_penalty_coef', 0.1)
         yaw_penalty_coef = self._cfg_getfloat('reward', 'yaw_penalty_coef', 0.5)
+        step_penalty = self._cfg_getfloat('reward', 'step_penalty', 0.0)
+        no_progress_penalty = self._cfg_getfloat('reward', 'no_progress_penalty', 0.0)
+        progress_epsilon = self._cfg_getfloat('reward', 'progress_epsilon', 0.01)
+        reverse_progress_penalty_coef = self._cfg_getfloat('reward', 'reverse_progress_penalty_coef', 0.0)
+        min_forward_speed = self._cfg_getfloat('reward', 'min_forward_speed', 0.0)
+        low_speed_penalty_coef = self._cfg_getfloat('reward', 'low_speed_penalty_coef', 0.0)
 
         if not done:
-            # 1 - goal reward
+            # 1 - goal reward.  Also penalize no-progress steps so a policy cannot
+            # avoid collisions by circling or crawling until max_episode_steps.
             distance_now = self.get_distance_to_goal_3d()
-            reward_distance = distance_reward_coef * (self.previous_distance_from_des_point - distance_now) / \
+            distance_progress = self.previous_distance_from_des_point - distance_now
+            reward_distance = distance_reward_coef * distance_progress / \
                 self.dynamic_model.goal_distance   # normalized to 100 according to goal_distance
             self.previous_distance_from_des_point = distance_now
 
@@ -633,9 +641,22 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
 
             yaw_error = self.dynamic_model.state_raw[2]
             yaw_error_cost = abs(yaw_error / 90)
+            progress_penalty = no_progress_penalty if distance_progress < progress_epsilon else 0.0
+            reverse_progress_penalty = reverse_progress_penalty_coef * max(0.0, -distance_progress)
+            forward_speed = float(action[0]) if len(np.asarray(action).reshape(-1)) > 0 else 0.0
+            low_speed_penalty = low_speed_penalty_coef * max(0.0, min_forward_speed - forward_speed)
 
             reward = reward_distance - pose_penalty_coef * punishment_pose - obstacle_penalty_coef * \
-                punishment_obs - action_penalty_coef * punishment_action - yaw_penalty_coef * yaw_error_cost
+                punishment_obs - action_penalty_coef * punishment_action - yaw_penalty_coef * yaw_error_cost - \
+                step_penalty - progress_penalty - reverse_progress_penalty - low_speed_penalty
+
+            if isinstance(getattr(self, '_current_step_info', None), dict):
+                self._current_step_info.update({
+                    'distance_progress': float(distance_progress),
+                    'progress_penalty': float(progress_penalty),
+                    'reverse_progress_penalty': float(reverse_progress_penalty),
+                    'low_speed_penalty': float(low_speed_penalty),
+                })
         else:
             terminal_info = getattr(self, '_current_step_info', None) or self.get_done_info()
             if terminal_info.get('is_crash'):
@@ -644,7 +665,7 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
                 reward = reward_outside
             elif terminal_info.get('is_success'):
                 reward = reward_reach
-            elif terminal_info.get('is_timeout'):
+            elif terminal_info.get('is_timeout') or terminal_info.get('is_max_steps'):
                 reward = reward_timeout
 
         return reward
@@ -927,16 +948,19 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
         is_success = self.is_in_desired_pose()
         is_crash = self.is_crashed()
         is_not_in_workspace = self.is_not_inside_workspace()
-        is_timeout = self.step_num + 1 >= self.max_episode_steps
-        done = is_crash or is_not_in_workspace or is_success or is_timeout
+        episode_step = self.step_num + 1
+        # This is a max-episode/search-step termination, not wall-clock runtime.
+        is_max_steps = episode_step >= self.max_episode_steps
+        is_timeout = is_max_steps  # Backward-compatible alias used by older logs/configs.
+        done = is_crash or is_not_in_workspace or is_success or is_max_steps
         if is_crash:
             done_reason = 'crash'
         elif is_not_in_workspace:
             done_reason = 'outside'
         elif is_success:
             done_reason = 'success'
-        elif is_timeout:
-            done_reason = 'timeout'
+        elif is_max_steps:
+            done_reason = 'max_steps'
         else:
             done_reason = ''
         return {
@@ -944,9 +968,12 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
             'is_crash': is_crash,
             'is_not_in_workspace': is_not_in_workspace,
             'is_timeout': is_timeout,
+            'is_max_steps': is_max_steps,
             'done_reason': done_reason,
             'done': done,
-            'step_num': self.step_num + 1
+            'step_num': episode_step,
+            'episode_step': episode_step,
+            'max_episode_steps': self.max_episode_steps
         }
 
     def _add_constraint_info(self, info, action):
@@ -964,6 +991,7 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
         safe_distance = self._cfg_getfloat('constraint', 'safe_distance', self.crash_distance + 3.0)
         crash_cost = self._cfg_getfloat('constraint', 'crash_cost', 1.0)
         outside_cost = self._cfg_getfloat('constraint', 'outside_cost', 0.5)
+        max_steps_cost = self._cfg_getfloat('constraint', 'max_steps_cost', 0.3)
         action_cost_coef = self._cfg_getfloat('constraint', 'action_cost_coef', 0.05)
         yaw_cost_coef = self._cfg_getfloat('constraint', 'yaw_cost_coef', 0.05)
 
@@ -976,8 +1004,14 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
 
         action_arr = np.asarray(action, dtype=np.float32).reshape(-1)
         if action_arr.size:
+            # Do not treat forward speed itself as unsafe, otherwise the safety
+            # critic can learn to prefer crawling or circling.  In 2D we use yaw
+            # effort; in 3D include vertical effort as well.
             action_span = np.maximum(np.asarray(self.action_space.high, dtype=np.float32).reshape(-1), 1e-6)
-            action_cost = float(np.clip(np.mean(np.abs(action_arr) / action_span), 0.0, 1.0))
+            controlled = [abs(action_arr[-1]) / action_span[-1]]
+            if getattr(self.dynamic_model, 'navigation_3d', False) and action_arr.size > 2:
+                controlled.append(abs(action_arr[1]) / action_span[1])
+            action_cost = float(np.clip(np.mean(controlled), 0.0, 1.0))
         else:
             action_cost = 0.0
 
@@ -992,6 +1026,8 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
             obstacle_cost = max(float(obstacle_cost), crash_cost)
         elif info.get('is_not_in_workspace'):
             terminal_cost = outside_cost
+        elif info.get('is_max_steps') or info.get('is_timeout'):
+            terminal_cost = max_steps_cost
 
         constraint_cost = max(
             terminal_cost,
