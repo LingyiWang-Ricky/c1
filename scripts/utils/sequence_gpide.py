@@ -878,6 +878,7 @@ class SequenceGPIDESACAgent:
             "progress_penalty", "reverse_progress_penalty", "low_speed_penalty",
             "heading_alignment", "heading_reward", "heading_error_penalty",
             "boundary_margin", "boundary_cost", "boundary_penalty", "path_distance", "path_penalty",
+            "boundary_shield_active", "boundary_outward_score", "boundary_shield_yaw_error_deg",
             "q1_loss", "q2_loss", "critic_loss", "actor_loss", "alpha_loss", "cost_loss",
             "alpha", "nu", "kl"
         ])
@@ -920,6 +921,9 @@ class SequenceGPIDESACAgent:
                 info.get("boundary_penalty", "") if isinstance(info, dict) else "",
                 info.get("path_distance", "") if isinstance(info, dict) else "",
                 info.get("path_penalty", "") if isinstance(info, dict) else "",
+                info.get("boundary_shield_active", "") if isinstance(info, dict) else "",
+                info.get("boundary_outward_score", "") if isinstance(info, dict) else "",
+                info.get("boundary_shield_yaw_error_deg", "") if isinstance(info, dict) else "",
                 self.last_stats.q1_loss, self.last_stats.q2_loss, q_loss, self.last_stats.actor_loss,
                 self.last_stats.alpha_loss, self.last_stats.cost_loss, self.last_stats.alpha,
                 self.last_stats.nu, self.last_stats.kl,
@@ -1015,11 +1019,15 @@ class SequenceGPIDESACAgent:
                 action = self.select_action(deterministic=False)
 
             next_obs, reward, done, info = self.env.step(action)
+            if isinstance(info, dict):
+                executed_action = np.asarray(info.get("executed_action", action), dtype=np.float32)
+            else:
+                executed_action = action
             next_obs_vec = self.vectorizer(next_obs)
-            action_norm = self.normalize_action(action)
+            action_norm = self.normalize_action(executed_action)
             cost = float(info.get("constraint_cost", 0.0)) if isinstance(info, dict) else 0.0
             self.replay_buffer.add(obs_vec, action_norm, float(reward), next_obs_vec, bool(done), cost)
-            self.observe(action, reward, next_obs)
+            self.observe(executed_action, reward, next_obs)
             self.episode_reward += float(reward)
             self.episode_cost += cost
             self.episode_len += 1

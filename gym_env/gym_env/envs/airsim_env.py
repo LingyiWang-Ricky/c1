@@ -221,6 +221,7 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
         # reset state
         self.dynamic_model.reset()
         self._current_step_info = None
+        self._boundary_shield_info = {}
 
         self.episode_num += 1
         self.step_num = 0
@@ -235,6 +236,7 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
         return obs
 
     def step(self, action):
+        action = self.apply_boundary_shield(action)
         # set action
         if self.dynamic_name == 'SimpleFixedwing':
             # add step to calculate pitch flap deg Fixed wing only
@@ -1065,13 +1067,88 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
             'obstacle_cost': float(np.clip(obstacle_cost, 0.0, max(1.0, crash_cost))),
             'action_cost': action_cost,
             'yaw_error_cost': yaw_error_cost,
+            'executed_action': np.asarray(action, dtype=np.float32).reshape(-1).tolist(),
             'boundary_margin': float(boundary_margin),
             'boundary_cost': boundary_cost,
             'distance_to_goal': float(self.dynamic_model.goal_distance),
             'current_distance_to_goal': float(self.get_distance_to_goal_3d()),
             'relative_yaw_deg': float(self.dynamic_model.state_raw[2]) if hasattr(self.dynamic_model, 'state_raw') and len(self.dynamic_model.state_raw) > 2 else 0.0,
             'min_distance_to_obstacles': min_distance,
+            **getattr(self, '_boundary_shield_info', {}),
         })
+
+    def apply_boundary_shield(self, action):
+        """Limit outward actions near workspace boundaries.
+
+        Reward penalties alone often arrive too late: early exploration may cross
+        the boundary before the policy learns the cost.  This light-weight guard
+        only activates close to the workspace edge and when the commanded forward
+        direction points outward.
+        """
+        self._boundary_shield_info = {}
+        enabled = self.cfg.getboolean('safety', 'boundary_shield_enabled', fallback=False)
+        if not enabled or self.dynamic_name != 'SimpleMultirotor':
+            return action
+
+        action_arr = np.asarray(action, dtype=np.float32).copy()
+        if action_arr.size < 2:
+            return action_arr
+
+        margin = self.get_workspace_margin()
+        shield_margin = self._cfg_getfloat('safety', 'boundary_shield_margin', 10.0)
+        if margin >= shield_margin:
+            self._boundary_shield_info = {
+                'boundary_shield_active': 0,
+                'boundary_shield_margin': float(margin),
+            }
+            return action_arr
+
+        position = self.dynamic_model.get_position()
+        yaw = self.dynamic_model.get_attitude()[2]
+        forward_x = math.cos(yaw)
+        forward_y = math.sin(yaw)
+        outward_score = 0.0
+        if position[0] - self.work_space_x[0] < shield_margin:
+            outward_score = max(outward_score, -forward_x)
+        if self.work_space_x[1] - position[0] < shield_margin:
+            outward_score = max(outward_score, forward_x)
+        if position[1] - self.work_space_y[0] < shield_margin:
+            outward_score = max(outward_score, -forward_y)
+        if self.work_space_y[1] - position[1] < shield_margin:
+            outward_score = max(outward_score, forward_y)
+
+        if outward_score <= 0.0:
+            self._boundary_shield_info = {
+                'boundary_shield_active': 0,
+                'boundary_shield_margin': float(margin),
+                'boundary_outward_score': float(outward_score),
+            }
+            return action_arr
+
+        center_x = 0.5 * (self.work_space_x[0] + self.work_space_x[1])
+        center_y = 0.5 * (self.work_space_y[0] + self.work_space_y[1])
+        desired_yaw = math.atan2(center_y - position[1], center_x - position[0])
+        yaw_error = desired_yaw - yaw
+        if yaw_error > math.pi:
+            yaw_error -= 2 * math.pi
+        elif yaw_error < -math.pi:
+            yaw_error += 2 * math.pi
+
+        shield_speed = self._cfg_getfloat('safety', 'boundary_shield_speed', 1.0)
+        yaw_gain = self._cfg_getfloat('safety', 'boundary_shield_yaw_gain', 1.5)
+        action_arr[0] = min(float(action_arr[0]), max(float(self.dynamic_model.v_xy_min), shield_speed))
+        action_arr[-1] = np.clip(
+            yaw_gain * yaw_error,
+            -self.dynamic_model.yaw_rate_max_rad,
+            self.dynamic_model.yaw_rate_max_rad,
+        )
+        self._boundary_shield_info = {
+            'boundary_shield_active': 1,
+            'boundary_shield_margin': float(margin),
+            'boundary_outward_score': float(outward_score),
+            'boundary_shield_yaw_error_deg': float(math.degrees(yaw_error)),
+        }
+        return action_arr.astype(np.float32)
 
     def _cfg_getfloat(self, section, option, default):
         try:
@@ -1079,16 +1156,29 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
         except (NoOptionError, NoSectionError, ValueError):
             return default
 
-    def get_workspace_margin(self):
+    def get_workspace_margin(self, include_z=None):
+        """Return distance to the nearest relevant workspace boundary.
+
+        SimpleMultirotor 2D policies keep altitude fixed, so using the z-axis
+        clearance for boundary reward/cost shaping makes the agent look close to
+        a boundary everywhere when the nominal flight height is below the xy
+        safety margin.  Keep z in the hard workspace check, but ignore it for
+        2D shaping/shield decisions unless explicitly requested.
+        """
         current_position = self.dynamic_model.get_position()
         margins = [
             current_position[0] - self.work_space_x[0],
             self.work_space_x[1] - current_position[0],
             current_position[1] - self.work_space_y[0],
             self.work_space_y[1] - current_position[1],
-            current_position[2] - self.work_space_z[0],
-            self.work_space_z[1] - current_position[2],
         ]
+        if include_z is None:
+            include_z = bool(getattr(self.dynamic_model, 'navigation_3d', False))
+        if include_z:
+            margins.extend([
+                current_position[2] - self.work_space_z[0],
+                self.work_space_z[1] - current_position[2],
+            ])
         return float(min(margins))
 
     def is_not_inside_workspace(self):
