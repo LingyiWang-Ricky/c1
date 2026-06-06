@@ -1,0 +1,172 @@
+diff --git a/.idea/1.iml b/.idea/1.iml
+index 2be5761..6248d95 100644
+--- a/.idea/1.iml
++++ b/.idea/1.iml
+@@ -2,7 +2,7 @@
+ <module type="PYTHON_MODULE" version="4">
+   <component name="NewModuleRootManager">
+     <content url="file://$MODULE_DIR$" />
+-    <orderEntry type="jdk" jdkName="MetaMind" jdkType="Python SDK" />
++    <orderEntry type="jdk" jdkName="UAV_DRL_AirSim" jdkType="Python SDK" />
+     <orderEntry type="sourceFolder" forTests="false" />
+   </component>
+   <component name="PyDocumentationSettings">
+diff --git a/.idea/misc.xml b/.idea/misc.xml
+index 3f7f894..6761f2c 100644
+--- a/.idea/misc.xml
++++ b/.idea/misc.xml
+@@ -3,5 +3,5 @@
+   <component name="Black">
+     <option name="sdkName" value="Python 3.8" />
+   </component>
+-  <component name="ProjectRootManager" version="2" project-jdk-name="MetaMind" project-jdk-type="Python SDK" />
++  <component name="ProjectRootManager" version="2" project-jdk-name="UAV_DRL_AirSim" project-jdk-type="Python SDK" />
+ </project>
+\ No newline at end of file
+diff --git a/.idea/workspace.xml b/.idea/workspace.xml
+index e5a6f14..8c2d699 100644
+--- a/.idea/workspace.xml
++++ b/.idea/workspace.xml
+@@ -4,7 +4,12 @@
+     <option name="autoReloadType" value="SELECTIVE" />
+   </component>
+   <component name="ChangeListManager">
+-    <list default="true" id="ec40a446-255f-4cde-a37d-c1ed40cc7f76" name="更改" comment="" />
++    <list default="true" id="ec40a446-255f-4cde-a37d-c1ed40cc7f76" name="更改" comment="更改">
++      <change beforePath="$PROJECT_DIR$/.idea/1.iml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/1.iml" afterDir="false" />
++      <change beforePath="$PROJECT_DIR$/.idea/misc.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
++      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
++      <change beforePath="$PROJECT_DIR$/airsim_settings/settings_simpledynamics.json" beforeDir="false" />
++    </list>
+     <option name="SHOW_DIALOG" value="false" />
+     <option name="HIGHLIGHT_CONFLICTS" value="true" />
+     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+@@ -21,8 +26,8 @@
+ }</component>
+   <component name="GithubPullRequestsUISettings">{
+   &quot;selectedUrlAndAccountId&quot;: {
+-    &quot;url&quot;: &quot;https://github.com/heleidsn/UAV_Navigation_DRL_AirSim.git&quot;,
+-    &quot;accountId&quot;: &quot;f97fdf9b-1c07-45f3-ab3f-6be647be7e53&quot;
++    &quot;url&quot;: &quot;https://github.com/LingyiWang-Ricky/c1.git&quot;,
++    &quot;accountId&quot;: &quot;10f01951-774a-4e5e-9392-a7a530dbbe4a&quot;
+   }
+ }</component>
+   <component name="HighlightingSettingsPerFile">
+@@ -43,13 +48,25 @@
+     &quot;Python.start_evaluate_with_plot.executor&quot;: &quot;Run&quot;,
+     &quot;Python.start_train_with_plot.executor&quot;: &quot;Run&quot;,
+     &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
++    &quot;RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager&quot;: &quot;true&quot;,
+     &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
+     &quot;git-widget-placeholder&quot;: &quot;main&quot;,
+     &quot;ignore.virus.scanning.warn.message&quot;: &quot;true&quot;,
+-    &quot;last_opened_file_path&quot;: &quot;D:/UAV_Navigation_DRL_AirSim/scripts/__init__.py&quot;,
+-    &quot;settings.editor.selected.configurable&quot;: &quot;com.jetbrains.python.configuration.PyActiveSdkModuleConfigurable&quot;
++    &quot;last_opened_file_path&quot;: &quot;C:/code/1&quot;,
++    &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
++    &quot;node.js.detected.package.tslint&quot;: &quot;true&quot;,
++    &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
++    &quot;node.js.selected.package.tslint&quot;: &quot;(autodetect)&quot;,
++    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
++    &quot;settings.editor.selected.configurable&quot;: &quot;com.jetbrains.python.configuration.PyActiveSdkModuleConfigurable&quot;,
++    &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
+   }
+ }</component>
++  <component name="RecentsManager">
++    <key name="CopyFile.RECENT_KEYS">
++      <recent name="C:\code\1" />
++    </key>
++  </component>
+   <component name="RunManager" selected="Python.start_train_with_plot">
+     <configuration name="start_evaluate_with_plot" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
+       <module name="UAV_Navigation_DRL_AirSim" />
+@@ -108,13 +125,6 @@
+       </list>
+     </recent_temporary>
+   </component>
+-  <component name="SharedIndexes">
+-    <attachedChunks>
+-      <set>
+-        <option value="bundled-python-sdk-4f4e415b4190-aa17d162503b-com.jetbrains.pycharm.community.sharedIndexes.bundled-PC-243.26053.29" />
+-      </set>
+-    </attachedChunks>
+-  </component>
+   <component name="SpellCheckerSettings" RuntimeDictionaries="0" Folders="0" CustomDictionaries="0" DefaultDictionary="应用程序级" UseSingleDictionary="true" transferred="true" />
+   <component name="TaskManager">
+     <task active="true" id="Default" summary="默认任务">
+@@ -123,9 +133,25 @@
+       <option name="number" value="Default" />
+       <option name="presentableId" value="Default" />
+       <updated>1743622282044</updated>
++      <workItem from="1780709115503" duration="1093000" />
++      <workItem from="1780710249517" duration="2389000" />
+     </task>
+     <servers />
+   </component>
++  <component name="TypeScriptGeneratedFilesManager">
++    <option name="version" value="3" />
++  </component>
++  <component name="Vcs.Log.Tabs.Properties">
++    <option name="TAB_STATES">
++      <map>
++        <entry key="MAIN">
++          <value>
++            <State />
++          </value>
++        </entry>
++      </map>
++    </option>
++  </component>
+   <component name="XDebuggerManager">
+     <breakpoint-manager>
+       <breakpoints>
+diff --git a/airsim_settings/settings_simpledynamics.json b/airsim_settings/settings_simpledynamics.json
+deleted file mode 100644
+index de5e162..0000000
+--- a/airsim_settings/settings_simpledynamics.json
++++ /dev/null
+@@ -1,44 +0,0 @@
+-{
+-  "SeeDocsAt": "https://github.com/Microsoft/AirSim/blob/master/docs/settings.md",
+-  "SettingsVersion": 1.2,
+-  "SimMode": "ComputerVision",
+-  "ViewMode": "NoDisplay",
+-  "ClockSpeed": 1,
+-  "SubWindows": [
+-    {"WindowID": 0, "CameraID": 0, "ImageType": 0, "Visible": true},
+-    {"WindowID": 1, "CameraID": 0, "ImageType": 3, "Visible": false},
+-    {"WindowID": 2, "CameraID": 0, "ImageType": 3, "Visible": true}
+-    ],
+-  "CameraDefaults": {
+-    "CaptureSettings": [
+-      {
+-        "ImageType": 3,
+-        "Width": 100,
+-        "Height": 80,
+-        "FOV_Degrees": 90,
+-        "AutoExposureSpeed": 100,
+-        "AutoExposureBias": 0,
+-        "AutoExposureMaxBrightness": 0.64,
+-        "AutoExposureMinBrightness": 0.03,
+-        "MotionBlurAmount": 0,
+-        "TargetGamma": 1.0,
+-        "ProjectionMode": "",
+-        "OrthoWidth": 5.12
+-      },
+-      {
+-        "ImageType": 0,
+-        "Width": 256,
+-        "Height": 144,
+-        "FOV_Degrees": 90,
+-        "AutoExposureSpeed": 100,
+-        "AutoExposureBias": 0,
+-        "AutoExposureMaxBrightness": 0.64,
+-        "AutoExposureMinBrightness": 0.03,
+-        "MotionBlurAmount": 0,
+-        "TargetGamma": 1.0,
+-        "ProjectionMode": "",
+-        "OrthoWidth": 5.12
+-      }
+-    ]
+-  }
+-}

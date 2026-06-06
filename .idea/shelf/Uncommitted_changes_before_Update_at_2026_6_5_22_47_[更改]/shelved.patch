@@ -1,0 +1,19 @@
+Index: configs/config_NH_center_SimpleMultirotor_3D.ini
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/configs/config_NH_center_SimpleMultirotor_3D.ini b/configs/config_NH_center_SimpleMultirotor_2D.ini
+rename from configs/config_NH_center_SimpleMultirotor_3D.ini
+rename to configs/config_NH_center_SimpleMultirotor_2D.ini
+--- a/configs/config_NH_center_SimpleMultirotor_3D.ini	(revision bd77b631ed6b974a83ffa457787fa293d3d323ba)
++++ b/configs/config_NH_center_SimpleMultirotor_2D.ini	(date 1780713337866)
+@@ -2,7 +2,7 @@
+ env_name = NH_center
+ dynamic_name = SimpleMultirotor
+ 
+-navigation_3d = True
++navigation_3d = False
+ using_velocity_state = False
+ reward_type = reward_final
+ 

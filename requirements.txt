@@ -1,0 +1,10 @@
+airsim
+gym
+numpy
+opencv-python
+PyQt5
+stable-baselines3
+torch
+torchvision
+tqdm
+wandb

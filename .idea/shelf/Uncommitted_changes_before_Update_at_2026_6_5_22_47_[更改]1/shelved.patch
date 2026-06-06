@@ -1,0 +1,190 @@
+Index: airsim_settings/settings_simpledynamics.json
+===================================================================
+diff --git a/airsim_settings/settings_simpledynamics.json b/airsim_settings/settings_simpledynamics.json
+deleted file mode 100644
+--- a/airsim_settings/settings_simpledynamics.json	(revision bd77b631ed6b974a83ffa457787fa293d3d323ba)
++++ /dev/null	(revision bd77b631ed6b974a83ffa457787fa293d3d323ba)
+@@ -1,44 +0,0 @@
+-{
+-  "SeeDocsAt": "https://github.com/Microsoft/AirSim/blob/master/docs/settings.md",
+-  "SettingsVersion": 1.2,
+-  "SimMode": "ComputerVision",
+-  "ViewMode": "NoDisplay",
+-  "ClockSpeed": 1,
+-  "SubWindows": [
+-    {"WindowID": 0, "CameraID": 0, "ImageType": 0, "Visible": true},
+-    {"WindowID": 1, "CameraID": 0, "ImageType": 3, "Visible": false},
+-    {"WindowID": 2, "CameraID": 0, "ImageType": 3, "Visible": true}
+-    ],
+-  "CameraDefaults": {
+-    "CaptureSettings": [
+-      {
+-        "ImageType": 3,
+-        "Width": 100,
+-        "Height": 80,
+-        "FOV_Degrees": 90,
+-        "AutoExposureSpeed": 100,
+-        "AutoExposureBias": 0,
+-        "AutoExposureMaxBrightness": 0.64,
+-        "AutoExposureMinBrightness": 0.03,
+-        "MotionBlurAmount": 0,
+-        "TargetGamma": 1.0,
+-        "ProjectionMode": "",
+-        "OrthoWidth": 5.12
+-      },
+-      {
+-        "ImageType": 0,
+-        "Width": 256,
+-        "Height": 144,
+-        "FOV_Degrees": 90,
+-        "AutoExposureSpeed": 100,
+-        "AutoExposureBias": 0,
+-        "AutoExposureMaxBrightness": 0.64,
+-        "AutoExposureMinBrightness": 0.03,
+-        "MotionBlurAmount": 0,
+-        "TargetGamma": 1.0,
+-        "ProjectionMode": "",
+-        "OrthoWidth": 5.12
+-      }
+-    ]
+-  }
+-}
+Index: .idea/workspace.xml
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+><?xml version=\"1.0\" encoding=\"UTF-8\"?>\r\n<project version=\"4\">\r\n  <component name=\"AutoImportSettings\">\r\n    <option name=\"autoReloadType\" value=\"SELECTIVE\" />\r\n  </component>\r\n  <component name=\"ChangeListManager\">\r\n    <list default=\"true\" id=\"ec40a446-255f-4cde-a37d-c1ed40cc7f76\" name=\"更改\" comment=\"\" />\r\n    <option name=\"SHOW_DIALOG\" value=\"false\" />\r\n    <option name=\"HIGHLIGHT_CONFLICTS\" value=\"true\" />\r\n    <option name=\"HIGHLIGHT_NON_ACTIVE_CHANGELIST\" value=\"false\" />\r\n    <option name=\"LAST_RESOLUTION\" value=\"IGNORE\" />\r\n  </component>\r\n  <component name=\"Git.Settings\">\r\n    <option name=\"RECENT_GIT_ROOT_PATH\" value=\"$PROJECT_DIR$\" />\r\n  </component>\r\n  <component name=\"GitHubPullRequestSearchHistory\">{\r\n  &quot;lastFilter&quot;: {\r\n    &quot;state&quot;: &quot;OPEN&quot;,\r\n    &quot;assignee&quot;: &quot;Q1jiaotashidi&quot;\r\n  }\r\n}</component>\r\n  <component name=\"GithubPullRequestsUISettings\">{\r\n  &quot;selectedUrlAndAccountId&quot;: {\r\n    &quot;url&quot;: &quot;https://github.com/heleidsn/UAV_Navigation_DRL_AirSim.git&quot;,\r\n    &quot;accountId&quot;: &quot;f97fdf9b-1c07-45f3-ab3f-6be647be7e53&quot;\r\n  }\r\n}</component>\r\n  <component name=\"HighlightingSettingsPerFile\">\r\n    <setting file=\"file://$PROJECT_DIR$/../Anconda/envs/uav_navigation/Lib/configparser.py\" root0=\"SKIP_INSPECTION\" />\r\n  </component>\r\n  <component name=\"ProjectColorInfo\">{\r\n  &quot;customColor&quot;: &quot;&quot;,\r\n  &quot;associatedIndex&quot;: 5\r\n}</component>\r\n  <component name=\"ProjectId\" id=\"2vBdDYNjNnDb3hkllSzeZ6bgZ9L\" />\r\n  <component name=\"ProjectViewState\">\r\n    <option name=\"hideEmptyMiddlePackages\" value=\"true\" />\r\n    <option name=\"showLibraryContents\" value=\"true\" />\r\n  </component>\r\n  <component name=\"PropertiesComponent\">{\r\n  &quot;keyToString&quot;: {\r\n    &quot;ASKED_SHARE_PROJECT_CONFIGURATION_FILES&quot;: &quot;true&quot;,\r\n    &quot;Python.start_evaluate_with_plot.executor&quot;: &quot;Run&quot;,\r\n    &quot;Python.start_train_with_plot.executor&quot;: &quot;Run&quot;,\r\n    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,\r\n    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,\r\n    &quot;git-widget-placeholder&quot;: &quot;main&quot;,\r\n    &quot;ignore.virus.scanning.warn.message&quot;: &quot;true&quot;,\r\n    &quot;last_opened_file_path&quot;: &quot;D:/UAV_Navigation_DRL_AirSim/scripts/__init__.py&quot;,\r\n    &quot;settings.editor.selected.configurable&quot;: &quot;com.jetbrains.python.configuration.PyActiveSdkModuleConfigurable&quot;\r\n  }\r\n}</component>\r\n  <component name=\"RunManager\" selected=\"Python.start_train_with_plot\">\r\n    <configuration name=\"start_evaluate_with_plot\" type=\"PythonConfigurationType\" factoryName=\"Python\" temporary=\"true\" nameIsGenerated=\"true\">\r\n      <module name=\"UAV_Navigation_DRL_AirSim\" />\r\n      <option name=\"ENV_FILES\" value=\"\" />\r\n      <option name=\"INTERPRETER_OPTIONS\" value=\"\" />\r\n      <option name=\"PARENT_ENVS\" value=\"true\" />\r\n      <envs>\r\n        <env name=\"PYTHONUNBUFFERED\" value=\"1\" />\r\n      </envs>\r\n      <option name=\"SDK_HOME\" value=\"\" />\r\n      <option name=\"WORKING_DIRECTORY\" value=\"$PROJECT_DIR$/\" />\r\n      <option name=\"IS_MODULE_SDK\" value=\"true\" />\r\n      <option name=\"ADD_CONTENT_ROOTS\" value=\"true\" />\r\n      <option name=\"ADD_SOURCE_ROOTS\" value=\"true\" />\r\n      <EXTENSION ID=\"PythonCoverageRunConfigurationExtension\" runner=\"coverage.py\" />\r\n      <option name=\"SCRIPT_NAME\" value=\"$PROJECT_DIR$/scripts/start_evaluate_with_plot.py\" />\r\n      <option name=\"PARAMETERS\" value=\"\" />\r\n      <option name=\"SHOW_COMMAND_LINE\" value=\"false\" />\r\n      <option name=\"EMULATE_TERMINAL\" value=\"false\" />\r\n      <option name=\"MODULE_MODE\" value=\"false\" />\r\n      <option name=\"REDIRECT_INPUT\" value=\"false\" />\r\n      <option name=\"INPUT_FILE\" value=\"\" />\r\n      <method v=\"2\" />\r\n    </configuration>\r\n    <configuration name=\"start_train_with_plot\" type=\"PythonConfigurationType\" factoryName=\"Python\" temporary=\"true\" nameIsGenerated=\"true\">\r\n      <module name=\"UAV_Navigation_DRL_AirSim\" />\r\n      <option name=\"ENV_FILES\" value=\"\" />\r\n      <option name=\"INTERPRETER_OPTIONS\" value=\"\" />\r\n      <option name=\"PARENT_ENVS\" value=\"true\" />\r\n      <envs>\r\n        <env name=\"PYTHONUNBUFFERED\" value=\"1\" />\r\n      </envs>\r\n      <option name=\"SDK_HOME\" value=\"\" />\r\n      <option name=\"WORKING_DIRECTORY\" value=\"$PROJECT_DIR$/\" />\r\n      <option name=\"IS_MODULE_SDK\" value=\"true\" />\r\n      <option name=\"ADD_CONTENT_ROOTS\" value=\"true\" />\r\n      <option name=\"ADD_SOURCE_ROOTS\" value=\"true\" />\r\n      <EXTENSION ID=\"PythonCoverageRunConfigurationExtension\" runner=\"coverage.py\" />\r\n      <option name=\"SCRIPT_NAME\" value=\"$PROJECT_DIR$/scripts/start_train_with_plot.py\" />\r\n      <option name=\"PARAMETERS\" value=\"\" />\r\n      <option name=\"SHOW_COMMAND_LINE\" value=\"false\" />\r\n      <option name=\"EMULATE_TERMINAL\" value=\"false\" />\r\n      <option name=\"MODULE_MODE\" value=\"false\" />\r\n      <option name=\"REDIRECT_INPUT\" value=\"false\" />\r\n      <option name=\"INPUT_FILE\" value=\"\" />\r\n      <method v=\"2\" />\r\n    </configuration>\r\n    <list>\r\n      <item itemvalue=\"Python.start_evaluate_with_plot\" />\r\n      <item itemvalue=\"Python.start_train_with_plot\" />\r\n    </list>\r\n    <recent_temporary>\r\n      <list>\r\n        <item itemvalue=\"Python.start_train_with_plot\" />\r\n        <item itemvalue=\"Python.start_evaluate_with_plot\" />\r\n      </list>\r\n    </recent_temporary>\r\n  </component>\r\n  <component name=\"SharedIndexes\">\r\n    <attachedChunks>\r\n      <set>\r\n        <option value=\"bundled-python-sdk-4f4e415b4190-aa17d162503b-com.jetbrains.pycharm.community.sharedIndexes.bundled-PC-243.26053.29\" />\r\n      </set>\r\n    </attachedChunks>\r\n  </component>\r\n  <component name=\"SpellCheckerSettings\" RuntimeDictionaries=\"0\" Folders=\"0\" CustomDictionaries=\"0\" DefaultDictionary=\"应用程序级\" UseSingleDictionary=\"true\" transferred=\"true\" />\r\n  <component name=\"TaskManager\">\r\n    <task active=\"true\" id=\"Default\" summary=\"默认任务\">\r\n      <changelist id=\"ec40a446-255f-4cde-a37d-c1ed40cc7f76\" name=\"更改\" comment=\"\" />\r\n      <created>1743622282044</created>\r\n      <option name=\"number\" value=\"Default\" />\r\n      <option name=\"presentableId\" value=\"Default\" />\r\n      <updated>1743622282044</updated>\r\n    </task>\r\n    <servers />\r\n  </component>\r\n  <component name=\"XDebuggerManager\">\r\n    <breakpoint-manager>\r\n      <breakpoints>\r\n        <line-breakpoint enabled=\"true\" suspend=\"THREAD\" type=\"python-line\">\r\n          <url>file://$PROJECT_DIR$/gym_env/gym_env/__init__.py</url>\r\n          <option name=\"timeStamp\" value=\"1\" />\r\n        </line-breakpoint>\r\n      </breakpoints>\r\n    </breakpoint-manager>\r\n  </component>\r\n</project>
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/.idea/workspace.xml b/.idea/workspace.xml
+--- a/.idea/workspace.xml	(revision bd77b631ed6b974a83ffa457787fa293d3d323ba)
++++ b/.idea/workspace.xml	(date 1780712658404)
+@@ -4,7 +4,12 @@
+     <option name="autoReloadType" value="SELECTIVE" />
+   </component>
+   <component name="ChangeListManager">
+-    <list default="true" id="ec40a446-255f-4cde-a37d-c1ed40cc7f76" name="更改" comment="" />
++    <list default="true" id="ec40a446-255f-4cde-a37d-c1ed40cc7f76" name="更改" comment="更改">
++      <change beforePath="$PROJECT_DIR$/.idea/1.iml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/1.iml" afterDir="false" />
++      <change beforePath="$PROJECT_DIR$/.idea/misc.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
++      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
++      <change beforePath="$PROJECT_DIR$/airsim_settings/settings_simpledynamics.json" beforeDir="false" />
++    </list>
+     <option name="SHOW_DIALOG" value="false" />
+     <option name="HIGHLIGHT_CONFLICTS" value="true" />
+     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+@@ -21,8 +26,8 @@
+ }</component>
+   <component name="GithubPullRequestsUISettings">{
+   &quot;selectedUrlAndAccountId&quot;: {
+-    &quot;url&quot;: &quot;https://github.com/heleidsn/UAV_Navigation_DRL_AirSim.git&quot;,
+-    &quot;accountId&quot;: &quot;f97fdf9b-1c07-45f3-ab3f-6be647be7e53&quot;
++    &quot;url&quot;: &quot;https://github.com/LingyiWang-Ricky/c1.git&quot;,
++    &quot;accountId&quot;: &quot;10f01951-774a-4e5e-9392-a7a530dbbe4a&quot;
+   }
+ }</component>
+   <component name="HighlightingSettingsPerFile">
+@@ -43,13 +48,25 @@
+     &quot;Python.start_evaluate_with_plot.executor&quot;: &quot;Run&quot;,
+     &quot;Python.start_train_with_plot.executor&quot;: &quot;Run&quot;,
+     &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
++    &quot;RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager&quot;: &quot;true&quot;,
+     &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
+     &quot;git-widget-placeholder&quot;: &quot;main&quot;,
+     &quot;ignore.virus.scanning.warn.message&quot;: &quot;true&quot;,
+-    &quot;last_opened_file_path&quot;: &quot;D:/UAV_Navigation_DRL_AirSim/scripts/__init__.py&quot;,
+-    &quot;settings.editor.selected.configurable&quot;: &quot;com.jetbrains.python.configuration.PyActiveSdkModuleConfigurable&quot;
++    &quot;last_opened_file_path&quot;: &quot;C:/code/1&quot;,
++    &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
++    &quot;node.js.detected.package.tslint&quot;: &quot;true&quot;,
++    &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
++    &quot;node.js.selected.package.tslint&quot;: &quot;(autodetect)&quot;,
++    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
++    &quot;settings.editor.selected.configurable&quot;: &quot;com.jetbrains.python.configuration.PyActiveSdkModuleConfigurable&quot;,
++    &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
+   }
+ }</component>
++  <component name="RecentsManager">
++    <key name="CopyFile.RECENT_KEYS">
++      <recent name="C:\code\1" />
++    </key>
++  </component>
+   <component name="RunManager" selected="Python.start_train_with_plot">
+     <configuration name="start_evaluate_with_plot" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
+       <module name="UAV_Navigation_DRL_AirSim" />
+@@ -108,13 +125,6 @@
+       </list>
+     </recent_temporary>
+   </component>
+-  <component name="SharedIndexes">
+-    <attachedChunks>
+-      <set>
+-        <option value="bundled-python-sdk-4f4e415b4190-aa17d162503b-com.jetbrains.pycharm.community.sharedIndexes.bundled-PC-243.26053.29" />
+-      </set>
+-    </attachedChunks>
+-  </component>
+   <component name="SpellCheckerSettings" RuntimeDictionaries="0" Folders="0" CustomDictionaries="0" DefaultDictionary="应用程序级" UseSingleDictionary="true" transferred="true" />
+   <component name="TaskManager">
+     <task active="true" id="Default" summary="默认任务">
+@@ -123,8 +133,24 @@
+       <option name="number" value="Default" />
+       <option name="presentableId" value="Default" />
+       <updated>1743622282044</updated>
++      <workItem from="1780709115503" duration="1093000" />
++      <workItem from="1780710249517" duration="2389000" />
+     </task>
+     <servers />
++  </component>
++  <component name="TypeScriptGeneratedFilesManager">
++    <option name="version" value="3" />
++  </component>
++  <component name="Vcs.Log.Tabs.Properties">
++    <option name="TAB_STATES">
++      <map>
++        <entry key="MAIN">
++          <value>
++            <State />
++          </value>
++        </entry>
++      </map>
++    </option>
+   </component>
+   <component name="XDebuggerManager">
+     <breakpoint-manager>
+Index: .idea/misc.xml
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+><?xml version=\"1.0\" encoding=\"UTF-8\"?>\r\n<project version=\"4\">\r\n  <component name=\"Black\">\r\n    <option name=\"sdkName\" value=\"Python 3.8\" />\r\n  </component>\r\n  <component name=\"ProjectRootManager\" version=\"2\" project-jdk-name=\"MetaMind\" project-jdk-type=\"Python SDK\" />\r\n</project>
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/.idea/misc.xml b/.idea/misc.xml
+--- a/.idea/misc.xml	(revision bd77b631ed6b974a83ffa457787fa293d3d323ba)
++++ b/.idea/misc.xml	(date 1780709760535)
+@@ -3,5 +3,5 @@
+   <component name="Black">
+     <option name="sdkName" value="Python 3.8" />
+   </component>
+-  <component name="ProjectRootManager" version="2" project-jdk-name="MetaMind" project-jdk-type="Python SDK" />
++  <component name="ProjectRootManager" version="2" project-jdk-name="UAV_DRL_AirSim" project-jdk-type="Python SDK" />
+ </project>
+\ No newline at end of file
+Index: .idea/1.iml
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+><?xml version=\"1.0\" encoding=\"UTF-8\"?>\r\n<module type=\"PYTHON_MODULE\" version=\"4\">\r\n  <component name=\"NewModuleRootManager\">\r\n    <content url=\"file://$MODULE_DIR$\" />\r\n    <orderEntry type=\"jdk\" jdkName=\"MetaMind\" jdkType=\"Python SDK\" />\r\n    <orderEntry type=\"sourceFolder\" forTests=\"false\" />\r\n  </component>\r\n  <component name=\"PyDocumentationSettings\">\r\n    <option name=\"format\" value=\"PLAIN\" />\r\n    <option name=\"myDocStringFormat\" value=\"Plain\" />\r\n  </component>\r\n</module>
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/.idea/1.iml b/.idea/1.iml
+--- a/.idea/1.iml	(revision bd77b631ed6b974a83ffa457787fa293d3d323ba)
++++ b/.idea/1.iml	(date 1780709760531)
+@@ -2,7 +2,7 @@
+ <module type="PYTHON_MODULE" version="4">
+   <component name="NewModuleRootManager">
+     <content url="file://$MODULE_DIR$" />
+-    <orderEntry type="jdk" jdkName="MetaMind" jdkType="Python SDK" />
++    <orderEntry type="jdk" jdkName="UAV_DRL_AirSim" jdkType="Python SDK" />
+     <orderEntry type="sourceFolder" forTests="false" />
+   </component>
+   <component name="PyDocumentationSettings">
