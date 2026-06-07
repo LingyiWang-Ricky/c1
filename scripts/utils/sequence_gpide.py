@@ -641,19 +641,27 @@ class SequenceGPIDESACAgent:
             return action
         depth_feats = obs_vec[:self.vectorizer.depth_splits]
         center_idx = len(depth_feats) // 2
-        center = float(depth_feats[center_idx])
-        if center < self.safety_threshold:
+        # Use a small front sector instead of only the exact center bucket.
+        # Otherwise obstacles that are just left/right of center do not trigger
+        # the shield until the UAV is already very close.
+        front_start = max(0, center_idx - 1)
+        front_end = min(len(depth_feats), center_idx + 2)
+        front = float(depth_feats[front_start:front_end].max())
+        if front < self.safety_threshold:
             return action
         left = float(depth_feats[:center_idx].max()) if center_idx > 0 else 0.0
         right = float(depth_feats[center_idx + 1:].max()) if center_idx + 1 < len(depth_feats) else 0.0
-        # In image coordinates, obstacle on left -> turn right.  When both sides
-        # are similarly occupied, bias the shield toward the goal yaw encoded in
-        # the state features so avoidance does not systematically drive the UAV
+        # In this AirSim/NED-style simple dynamics, positive yaw rotates toward
+        # +Y (image-right for the forward camera).  Therefore an obstacle that
+        # dominates the left image sectors must produce a positive/right turn.
+        # When both sides are similarly occupied, bias the shield toward the
+        # goal yaw encoded in the state features so avoidance does not
+        # systematically drive the UAV
         # away from the target or out of bounds.  The state layout differs between
         # 2D ([distance, yaw]) and 3D ([distance_xy, distance_z, yaw]), so using
         # depth_splits + 1 for every task accidentally read vertical error as yaw
         # in 3D and could turn the aircraft away from the goal during avoidance.
-        obstacle_turn = -1.0 if left > right else 1.0
+        obstacle_turn = 1.0 if left > right else -1.0
         turn_sign = obstacle_turn
         state_start = self.vectorizer.depth_splits
         vertical_feature_idx = state_start + 1 if self.navigation_3d else None
@@ -735,7 +743,10 @@ class SequenceGPIDESACAgent:
         if self.focops_enabled:
             with torch.no_grad():
                 next_cost_action, _, _, _ = self.actor.sample(next_obs_seq, next_act_seq, next_rew_seq)
-                target_c = torch.min(
+                # Safety costs should be conservative: using the minimum of two
+                # cost critics underestimates risk and lets the actor exploit an
+                # optimistic critic near obstacles.
+                target_c = torch.max(
                     self.target_c1(next_obs_seq, next_act_seq, next_rew_seq, next_cost_action),
                     self.target_c2(next_obs_seq, next_act_seq, next_rew_seq, next_cost_action),
                 )
@@ -762,7 +773,7 @@ class SequenceGPIDESACAgent:
         actor_loss = (self.alpha.detach() * logp - q_new).mean()
         kl_mean = torch.tensor(0.0, device=self.device)
         if self.focops_enabled:
-            c_new = torch.min(self.c1(obs_seq, act_seq, rew_seq, new_action),
+            c_new = torch.max(self.c1(obs_seq, act_seq, rew_seq, new_action),
                               self.c2(obs_seq, act_seq, rew_seq, new_action))
             # Keep a baseline cost penalty in addition to the adaptive Lagrange
             # multiplier.  Otherwise early training starts with nu=0 and the
