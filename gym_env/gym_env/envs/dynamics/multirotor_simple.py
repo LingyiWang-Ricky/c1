@@ -27,7 +27,8 @@ class MultirotorDynamicsSimple():
         self.dt = cfg.getfloat('multirotor', 'dt')
 
         # AirSim Client
-        self.client = airsim.VehicleClient()
+        self.airsim_port = cfg.getint('airsim', 'port', fallback=41451)
+        self.client = airsim.VehicleClient(port=self.airsim_port)
         self.client.confirmConnection()
 
         # start and goal position

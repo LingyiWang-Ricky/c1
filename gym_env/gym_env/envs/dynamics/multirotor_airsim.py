@@ -18,7 +18,8 @@ class MultirotorDynamicsAirsim():
         self.dt = cfg.getfloat('multirotor', 'dt')
 
         # AirSim Client
-        self.client = airsim.MultirotorClient()
+        self.airsim_port = cfg.getint('airsim', 'port', fallback=41451)
+        self.client = airsim.MultirotorClient(port=self.airsim_port)
         self.client.confirmConnection()
         try:
             self.client.enableApiControl(True)
