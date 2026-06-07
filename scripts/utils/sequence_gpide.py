@@ -1095,12 +1095,22 @@ class SequenceGPIDESACAgent:
                 self.save(os.path.join(checkpoint_dir, f"gpide_ckpt_{step}.pt"), total_step=step)
 
             if done:
+                rate_sum = (
+                    episode_summary["success_rate"] + episode_summary["crash_rate"] +
+                    episode_summary["timeout_rate"] + episode_summary["outside_rate"] +
+                    episode_summary["stuck_rate"]
+                )
                 print(
                     "[GPIDE-SAC] episode={} len={} reward={:.3f} cost={:.3f} "
-                    "success_rate={:.3f} crash_rate={:.3f} timeout_rate={:.3f} info={}".format(
+                    "done_reason={} rates(success={:.3f}, crash={:.3f}, max_steps={:.3f}, "
+                    "outside={:.3f}, stuck={:.3f}, sum={:.3f}) "
+                    "counts(success={}, crash={}, max_steps={}, outside={}, stuck={}, completed={}) info={}".format(
                         self.episode_num, self.episode_len, self.episode_reward, self.episode_cost,
-                        episode_summary["success_rate"], episode_summary["crash_rate"],
-                        episode_summary["timeout_rate"], info
+                        episode_summary["done_reason"], episode_summary["success_rate"],
+                        episode_summary["crash_rate"], episode_summary["timeout_rate"],
+                        episode_summary["outside_rate"], episode_summary["stuck_rate"], rate_sum,
+                        self.success_episodes, self.crash_episodes, self.timeout_episodes,
+                        self.outside_episodes, self.stuck_episodes, self.completed_episodes, info
                     ),
                     flush=True,
                 )
