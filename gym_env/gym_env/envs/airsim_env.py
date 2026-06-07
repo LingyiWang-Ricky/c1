@@ -114,6 +114,7 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
             else:
                 # Multirotor dynamics randomize the goal on the City_400 boundary.
                 self.dynamic_model.set_goal(rect=goal_rect, random_angle=math.pi*2)
+                self._goal_curriculum_base_rect = list(goal_rect)
             self.work_space_x = [-220, 220]
             self.work_space_y = [-220, 220]
             self.work_space_z = [0, 100]
