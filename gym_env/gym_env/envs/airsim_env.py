@@ -45,6 +45,7 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
         self.dynamic_name = cfg.get('options', 'dynamic_name')
         self.keyboard_debug = cfg.getboolean('options', 'keyboard_debug')
         self.generate_q_map = cfg.getboolean('options', 'generate_q_map')
+        self.print_train_info = cfg.getboolean('options', 'print_train_info', fallback=True)
         self.perception_type = cfg.get('options', 'perception')
 
         # create LGMD agent
@@ -189,6 +190,9 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
         self.max_depth_meters = cfg.getint('environment', 'max_depth_meters')
         self.screen_height = cfg.getint('environment', 'screen_height')
         self.screen_width = cfg.getint('environment', 'screen_width')
+        self.image_retry_count = cfg.getint('environment', 'image_retry_count', fallback=3)
+        self.last_depth_image = None
+        self.last_gray_image = None
 
         self.trajectory_list = []
 
@@ -217,6 +221,7 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
         # reset state
         self.dynamic_model.reset()
         self._current_step_info = None
+        self._boundary_shield_info = {}
 
         self.episode_num += 1
         self.step_num = 0
@@ -231,6 +236,7 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
         return obs
 
     def step(self, action):
+        action = self.apply_boundary_shield(action)
         # set action
         if self.dynamic_name == 'SimpleFixedwing':
             # add step to calculate pitch flap deg Fixed wing only
@@ -246,6 +252,7 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
         info = self.get_done_info()
         done = info['done']
         self._current_step_info = info
+        self._add_constraint_info(info, action)
         if done:
             print(info)
 
@@ -267,7 +274,8 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
         self.cumulated_episode_reward += reward
 
         # ----------------print info---------------------------
-        self.print_train_info_airsim(action, obs, reward, info)
+        if self.print_train_info:
+            self.print_train_info_airsim(action, obs, reward, info)
 
         if self.cfg.get('options', 'dynamic_name') == 'SimpleFixedwing':
             self.set_pyqt_signal_fixedwing(action, reward, done)
@@ -351,57 +359,93 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
 
         return image_with_state
 
+    @staticmethod
+    def _valid_image_response(response):
+        return response is not None and response.width > 0 and response.height > 0
+
+    def _sim_get_images_with_retry(self, requests, min_responses=1):
+        """Call AirSim image API with bounded retries.
+
+        AirSim can occasionally return empty images or raise an RPCError such as
+        ``bad cast`` during long training runs.  Keep the request payload as a
+        list on every attempt and return ``None`` after the configured retry
+        budget so callers can fall back to the last valid frame instead of
+        crashing the trainer.
+        """
+        attempts = max(1, int(getattr(self, 'image_retry_count', 3)))
+        last_error = None
+        for attempt in range(attempts):
+            try:
+                responses = self.client.simGetImages(requests)
+            except Exception as exc:
+                last_error = exc
+                responses = None
+
+            if responses and len(responses) >= min_responses and self._valid_image_response(responses[0]):
+                return responses
+            print("get_image_fail... attempt {}/{}".format(attempt + 1, attempts))
+
+        if last_error is not None:
+            print("get_image_fail fallback after AirSim RPC error: {}".format(last_error))
+        return None
+
+    def _fallback_depth_image(self):
+        if self.last_depth_image is not None:
+            return self.last_depth_image.copy()
+        return np.full((self.screen_height, self.screen_width), self.max_depth_meters, dtype=np.float32)
+
+    def _fallback_gray_image(self):
+        if self.last_gray_image is not None:
+            return self.last_gray_image.copy()
+        return np.zeros((self.screen_height, self.screen_width), dtype=np.uint8)
+
     def get_depth_gray_image(self):
         # get depth and rgb image
         # scene vision image in png format
-        responses = self.client.simGetImages([
+        requests = [
             airsim.ImageRequest("0", airsim.ImageType.DepthVis, True),
             airsim.ImageRequest("0", airsim.ImageType.Scene, False, False),
-        ])
+        ]
+        responses = self._sim_get_images_with_retry(requests, min_responses=2)
+        if responses is None or not self._valid_image_response(responses[1]):
+            return self._fallback_depth_image(), self._fallback_gray_image()
 
-        # check observation
-        while responses[0].width == 0:
-            print("get_image_fail...")
-            responses = self.client.simGetImages([
-                airsim.ImageRequest("0", airsim.ImageType.DepthVis, True),
-                airsim.ImageRequest("0", airsim.ImageType.Scene, False, False),
-            ])
+        try:
+            # get depth image
+            depth_img = airsim.list_to_2d_float_array(
+                responses[0].image_data_float,
+                responses[0].width, responses[0].height)
+            depth_meter = (depth_img * 100).astype(np.float32)
 
-        # get depth image
-        depth_img = airsim.list_to_2d_float_array(
-            responses[0].image_data_float,
-            responses[0].width, responses[0].height)
-        depth_meter = depth_img * 100
+            # get gray image
+            img_1d = np.frombuffer(responses[1].image_data_uint8, dtype=np.uint8)
+            # reshape array to 3 channel image array H X W X 3
+            img_rgb = img_1d.reshape(responses[1].height, responses[1].width, 3)
+            img_gray = cv2.cvtColor(img_rgb, cv2.COLOR_BGR2GRAY)
+        except Exception as exc:
+            print("get_image_fail fallback after image decode error: {}".format(exc))
+            return self._fallback_depth_image(), self._fallback_gray_image()
 
-        # get gary image
-        img_1d = np.fromstring(responses[1].image_data_uint8, dtype=np.uint8)
-        # reshape array to 4 channel image array H X W X 3
-        img_rgb = img_1d.reshape(responses[1].height, responses[1].width, 3)
-        img_gray = cv2.cvtColor(img_rgb, cv2.COLOR_BGR2GRAY)
-
-        # cv2.imshow('test', img_rgb)
-        # cv2.waitKey(1)
-
+        self.last_depth_image = depth_meter.copy()
+        self.last_gray_image = img_gray.copy()
         return depth_meter, img_gray
 
     def get_depth_image(self):
+        requests = [airsim.ImageRequest("0", airsim.ImageType.DepthVis, True)]
+        responses = self._sim_get_images_with_retry(requests, min_responses=1)
+        if responses is None:
+            return self._fallback_depth_image()
 
-        responses = self.client.simGetImages([
-            airsim.ImageRequest("0", airsim.ImageType.DepthVis, True)
-        ])
+        try:
+            depth_img = airsim.list_to_2d_float_array(
+                responses[0].image_data_float, responses[0].width,
+                responses[0].height)
+            depth_meter = (depth_img * 100).astype(np.float32)
+        except Exception as exc:
+            print("get_image_fail fallback after depth decode error: {}".format(exc))
+            return self._fallback_depth_image()
 
-        # check observation
-        while responses[0].width == 0:
-            print("get_image_fail...")
-            responses = self.client.simGetImages(
-                airsim.ImageRequest("0", airsim.ImageType.DepthVis, True))
-
-        depth_img = airsim.list_to_2d_float_array(
-            responses[0].image_data_float, responses[0].width,
-            responses[0].height)
-
-        depth_meter = depth_img * 100
-
+        self.last_depth_image = depth_meter.copy()
         return depth_meter
 
     def get_obs_vector(self):
@@ -546,11 +590,24 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
         obstacle_penalty_coef = self._cfg_getfloat('reward', 'obstacle_penalty_coef', 0.2)
         action_penalty_coef = self._cfg_getfloat('reward', 'action_penalty_coef', 0.1)
         yaw_penalty_coef = self._cfg_getfloat('reward', 'yaw_penalty_coef', 0.5)
+        step_penalty = self._cfg_getfloat('reward', 'step_penalty', 0.0)
+        no_progress_penalty = self._cfg_getfloat('reward', 'no_progress_penalty', 0.0)
+        progress_epsilon = self._cfg_getfloat('reward', 'progress_epsilon', 0.01)
+        reverse_progress_penalty_coef = self._cfg_getfloat('reward', 'reverse_progress_penalty_coef', 0.0)
+        min_forward_speed = self._cfg_getfloat('reward', 'min_forward_speed', 0.0)
+        low_speed_penalty_coef = self._cfg_getfloat('reward', 'low_speed_penalty_coef', 0.0)
+        heading_alignment_coef = self._cfg_getfloat('reward', 'heading_alignment_coef', 0.0)
+        heading_error_penalty_coef = self._cfg_getfloat('reward', 'heading_error_penalty_coef', 0.0)
+        boundary_penalty_coef = self._cfg_getfloat('reward', 'boundary_penalty_coef', 0.0)
+        boundary_safe_margin = self._cfg_getfloat('reward', 'boundary_safe_margin', 5.0)
+        path_penalty_coef = self._cfg_getfloat('reward', 'path_penalty_coef', 0.0)
 
         if not done:
-            # 1 - goal reward
+            # 1 - goal reward.  Also penalize no-progress steps so a policy cannot
+            # avoid collisions by circling or crawling until max_episode_steps.
             distance_now = self.get_distance_to_goal_3d()
-            reward_distance = distance_reward_coef * (self.previous_distance_from_des_point - distance_now) / \
+            distance_progress = self.previous_distance_from_des_point - distance_now
+            reward_distance = distance_reward_coef * distance_progress / \
                 self.dynamic_model.goal_distance   # normalized to 100 according to goal_distance
             self.previous_distance_from_des_point = distance_now
 
@@ -591,9 +648,39 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
 
             yaw_error = self.dynamic_model.state_raw[2]
             yaw_error_cost = abs(yaw_error / 90)
+            heading_alignment = max(0.0, math.cos(math.radians(yaw_error)))
+            heading_reward = heading_alignment_coef * heading_alignment
+            heading_error_penalty = heading_error_penalty_coef * abs(yaw_error / 180.0)
+            progress_penalty = no_progress_penalty if distance_progress < progress_epsilon else 0.0
+            reverse_progress_penalty = reverse_progress_penalty_coef * max(0.0, -distance_progress)
+            forward_speed = float(action[0]) if len(np.asarray(action).reshape(-1)) > 0 else 0.0
+            low_speed_penalty = low_speed_penalty_coef * max(0.0, min_forward_speed - forward_speed)
+            boundary_margin = self.get_workspace_margin()
+            boundary_cost = 1.0 - np.clip(boundary_margin / max(boundary_safe_margin, 1e-6), 0.0, 1.0)
+            boundary_penalty = boundary_penalty_coef * boundary_cost
+            path_distance = self.getDis(x, y, self.dynamic_model.start_position[0], self.dynamic_model.start_position[1], x_g, y_g)
+            path_penalty = path_penalty_coef * np.clip(path_distance / 10.0, 0.0, 1.0)
 
-            reward = reward_distance - pose_penalty_coef * punishment_pose - obstacle_penalty_coef * \
-                punishment_obs - action_penalty_coef * punishment_action - yaw_penalty_coef * yaw_error_cost
+            reward = reward_distance + heading_reward - pose_penalty_coef * punishment_pose - obstacle_penalty_coef * \
+                punishment_obs - action_penalty_coef * punishment_action - yaw_penalty_coef * yaw_error_cost - \
+                step_penalty - progress_penalty - reverse_progress_penalty - low_speed_penalty - \
+                heading_error_penalty - boundary_penalty - path_penalty
+
+            if isinstance(getattr(self, '_current_step_info', None), dict):
+                self._current_step_info.update({
+                    'distance_progress': float(distance_progress),
+                    'progress_penalty': float(progress_penalty),
+                    'reverse_progress_penalty': float(reverse_progress_penalty),
+                    'low_speed_penalty': float(low_speed_penalty),
+                    'heading_alignment': float(heading_alignment),
+                    'heading_reward': float(heading_reward),
+                    'heading_error_penalty': float(heading_error_penalty),
+                    'boundary_margin': float(boundary_margin),
+                    'boundary_cost': float(boundary_cost),
+                    'boundary_penalty': float(boundary_penalty),
+                    'path_distance': float(path_distance),
+                    'path_penalty': float(path_penalty),
+                })
         else:
             terminal_info = getattr(self, '_current_step_info', None) or self.get_done_info()
             if terminal_info.get('is_crash'):
@@ -602,7 +689,7 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
                 reward = reward_outside
             elif terminal_info.get('is_success'):
                 reward = reward_reach
-            elif terminal_info.get('is_timeout'):
+            elif terminal_info.get('is_timeout') or terminal_info.get('is_max_steps'):
                 reward = reward_timeout
 
         return reward
@@ -885,16 +972,19 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
         is_success = self.is_in_desired_pose()
         is_crash = self.is_crashed()
         is_not_in_workspace = self.is_not_inside_workspace()
-        is_timeout = self.step_num + 1 >= self.max_episode_steps
-        done = is_crash or is_not_in_workspace or is_success or is_timeout
+        episode_step = self.step_num + 1
+        # This is a max-episode/search-step termination, not wall-clock runtime.
+        is_max_steps = episode_step >= self.max_episode_steps
+        is_timeout = is_max_steps  # Backward-compatible alias used by older logs/configs.
+        done = is_crash or is_not_in_workspace or is_success or is_max_steps
         if is_crash:
             done_reason = 'crash'
         elif is_not_in_workspace:
             done_reason = 'outside'
         elif is_success:
             done_reason = 'success'
-        elif is_timeout:
-            done_reason = 'timeout'
+        elif is_max_steps:
+            done_reason = 'max_steps'
         else:
             done_reason = ''
         return {
@@ -902,16 +992,214 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
             'is_crash': is_crash,
             'is_not_in_workspace': is_not_in_workspace,
             'is_timeout': is_timeout,
+            'is_max_steps': is_max_steps,
             'done_reason': done_reason,
             'done': done,
-            'step_num': self.step_num + 1
+            'step_num': episode_step,
+            'episode_step': episode_step,
+            'max_episode_steps': self.max_episode_steps
         }
+
+    def _add_constraint_info(self, info, action):
+        """Attach safety costs used by GPIDE/FOCOPS sequence SAC.
+
+        The sequence agent reads ``info['constraint_cost']`` as the cost target
+        for its FOCOPS-inspired cost critics.  Keep this independent from the
+        scalar reward so reward shaping and safety constraints can be tuned
+        separately.  Crash receives a terminal cost even if the obstacle distance
+        was not measurable on that step.
+        """
+        if info is None:
+            return
+
+        safe_distance = self._cfg_getfloat('constraint', 'safe_distance', self.crash_distance + 3.0)
+        crash_cost = self._cfg_getfloat('constraint', 'crash_cost', 1.0)
+        outside_cost = self._cfg_getfloat('constraint', 'outside_cost', 0.5)
+        max_steps_cost = self._cfg_getfloat('constraint', 'max_steps_cost', 0.3)
+        action_cost_coef = self._cfg_getfloat('constraint', 'action_cost_coef', 0.05)
+        yaw_cost_coef = self._cfg_getfloat('constraint', 'yaw_cost_coef', 0.05)
+        boundary_safe_margin = self._cfg_getfloat('constraint', 'boundary_safe_margin', 5.0)
+        boundary_cost_coef = self._cfg_getfloat('constraint', 'boundary_cost_coef', 0.3)
+
+        distance_margin = max(safe_distance - self.crash_distance, 1e-6)
+        min_distance = float(getattr(self, 'min_distance_to_obstacles', safe_distance))
+        if np.isfinite(min_distance):
+            obstacle_cost = 1.0 - np.clip((min_distance - self.crash_distance) / distance_margin, 0.0, 1.0)
+        else:
+            obstacle_cost = 0.0
+
+        action_arr = np.asarray(action, dtype=np.float32).reshape(-1)
+        if action_arr.size:
+            # Do not treat forward speed itself as unsafe, otherwise the safety
+            # critic can learn to prefer crawling or circling.  In 2D we use yaw
+            # effort; in 3D include vertical effort as well.
+            action_span = np.maximum(np.asarray(self.action_space.high, dtype=np.float32).reshape(-1), 1e-6)
+            controlled = [abs(action_arr[-1]) / action_span[-1]]
+            if getattr(self.dynamic_model, 'navigation_3d', False) and action_arr.size > 2:
+                controlled.append(abs(action_arr[1]) / action_span[1])
+            action_cost = float(np.clip(np.mean(controlled), 0.0, 1.0))
+        else:
+            action_cost = 0.0
+
+        yaw_error = 0.0
+        if hasattr(self.dynamic_model, 'state_raw') and len(self.dynamic_model.state_raw) > 2:
+            yaw_error = float(abs(self.dynamic_model.state_raw[2]) / 180.0)
+        yaw_error_cost = float(np.clip(yaw_error, 0.0, 1.0))
+        boundary_margin = self.get_workspace_margin()
+        boundary_cost = float(1.0 - np.clip(boundary_margin / max(boundary_safe_margin, 1e-6), 0.0, 1.0))
+
+        terminal_cost = 0.0
+        if info.get('is_crash'):
+            terminal_cost = crash_cost
+            obstacle_cost = max(float(obstacle_cost), crash_cost)
+        elif info.get('is_not_in_workspace'):
+            terminal_cost = outside_cost
+        elif info.get('is_max_steps') or info.get('is_timeout'):
+            terminal_cost = max_steps_cost
+
+        constraint_cost = max(
+            terminal_cost,
+            float(obstacle_cost) + action_cost_coef * action_cost + yaw_cost_coef * yaw_error_cost +
+            boundary_cost_coef * boundary_cost,
+        )
+        info.update({
+            'constraint_cost': float(np.clip(constraint_cost, 0.0, max(1.0, crash_cost))),
+            'obstacle_cost': float(np.clip(obstacle_cost, 0.0, max(1.0, crash_cost))),
+            'action_cost': action_cost,
+            'yaw_error_cost': yaw_error_cost,
+            'executed_action': np.asarray(action, dtype=np.float32).reshape(-1).tolist(),
+            'boundary_margin': float(boundary_margin),
+            'boundary_cost': boundary_cost,
+            'distance_to_goal': float(self.dynamic_model.goal_distance),
+            'current_distance_to_goal': float(self.get_distance_to_goal_3d()),
+            'relative_yaw_deg': float(self.dynamic_model.state_raw[2]) if hasattr(self.dynamic_model, 'state_raw') and len(self.dynamic_model.state_raw) > 2 else 0.0,
+            'min_distance_to_obstacles': min_distance,
+            **getattr(self, '_boundary_shield_info', {}),
+        })
+
+    def apply_boundary_shield(self, action):
+        """Limit outward actions near workspace boundaries.
+
+        Reward penalties alone often arrive too late: early exploration may cross
+        the boundary before the policy learns the cost.  This light-weight guard
+        only activates close to the workspace edge and when the commanded forward
+        direction points outward.
+        """
+        self._boundary_shield_info = {}
+        enabled = self.cfg.getboolean('safety', 'boundary_shield_enabled', fallback=False)
+        if not enabled or self.dynamic_name != 'SimpleMultirotor':
+            return action
+
+        action_arr = np.asarray(action, dtype=np.float32).copy()
+        if action_arr.size < 2:
+            return action_arr
+
+        margin = self.get_workspace_margin()
+        shield_margin = self._cfg_getfloat('safety', 'boundary_shield_margin', 10.0)
+        if margin >= shield_margin:
+            self._boundary_shield_info = {
+                'boundary_shield_active': 0,
+                'boundary_shield_margin': float(margin),
+            }
+            return action_arr
+
+        position = self.dynamic_model.get_position()
+        yaw = self.dynamic_model.get_attitude()[2]
+        forward_x = math.cos(yaw)
+        forward_y = math.sin(yaw)
+        outward_score = 0.0
+        if position[0] - self.work_space_x[0] < shield_margin:
+            outward_score = max(outward_score, -forward_x)
+        if self.work_space_x[1] - position[0] < shield_margin:
+            outward_score = max(outward_score, forward_x)
+        if position[1] - self.work_space_y[0] < shield_margin:
+            outward_score = max(outward_score, -forward_y)
+        if self.work_space_y[1] - position[1] < shield_margin:
+            outward_score = max(outward_score, forward_y)
+
+        z_outward_score = 0.0
+        if getattr(self.dynamic_model, 'navigation_3d', False) and action_arr.size >= 3:
+            z_speed_span = max(float(getattr(self.dynamic_model, 'v_z_max', 1.0)), 1e-6)
+            if position[2] - self.work_space_z[0] < shield_margin and action_arr[1] < 0.0:
+                z_outward_score = max(z_outward_score, float(-action_arr[1]) / z_speed_span)
+            if self.work_space_z[1] - position[2] < shield_margin and action_arr[1] > 0.0:
+                z_outward_score = max(z_outward_score, float(action_arr[1]) / z_speed_span)
+
+        if outward_score <= 0.0 and z_outward_score <= 0.0:
+            self._boundary_shield_info = {
+                'boundary_shield_active': 0,
+                'boundary_shield_margin': float(margin),
+                'boundary_outward_score': float(outward_score),
+                'boundary_z_outward_score': float(z_outward_score),
+            }
+            return action_arr
+
+        center_x = 0.5 * (self.work_space_x[0] + self.work_space_x[1])
+        center_y = 0.5 * (self.work_space_y[0] + self.work_space_y[1])
+        desired_yaw = math.atan2(center_y - position[1], center_x - position[0])
+        yaw_error = desired_yaw - yaw
+        if yaw_error > math.pi:
+            yaw_error -= 2 * math.pi
+        elif yaw_error < -math.pi:
+            yaw_error += 2 * math.pi
+
+        shield_speed = self._cfg_getfloat('safety', 'boundary_shield_speed', 1.0)
+        yaw_gain = self._cfg_getfloat('safety', 'boundary_shield_yaw_gain', 1.5)
+        action_arr[0] = min(float(action_arr[0]), max(float(self.dynamic_model.v_xy_min), shield_speed))
+        if outward_score > 0.0:
+            action_arr[-1] = np.clip(
+                yaw_gain * yaw_error,
+                -self.dynamic_model.yaw_rate_max_rad,
+                self.dynamic_model.yaw_rate_max_rad,
+            )
+        if z_outward_score > 0.0 and getattr(self.dynamic_model, 'navigation_3d', False) and action_arr.size >= 3:
+            z_center = 0.5 * (self.work_space_z[0] + self.work_space_z[1])
+            z_direction = np.sign(z_center - position[2])
+            z_shield_speed = self._cfg_getfloat('safety', 'boundary_shield_z_speed', 0.5)
+            action_arr[1] = np.clip(
+                z_direction * z_shield_speed,
+                -self.dynamic_model.v_z_max,
+                self.dynamic_model.v_z_max,
+            )
+        self._boundary_shield_info = {
+            'boundary_shield_active': 1,
+            'boundary_shield_margin': float(margin),
+            'boundary_outward_score': float(outward_score),
+            'boundary_z_outward_score': float(z_outward_score),
+            'boundary_shield_yaw_error_deg': float(math.degrees(yaw_error)),
+        }
+        return action_arr.astype(np.float32)
 
     def _cfg_getfloat(self, section, option, default):
         try:
             return self.cfg.getfloat(section, option)
         except (NoOptionError, NoSectionError, ValueError):
             return default
+
+    def get_workspace_margin(self, include_z=None):
+        """Return distance to the nearest relevant workspace boundary.
+
+        SimpleMultirotor 2D policies keep altitude fixed, so using the z-axis
+        clearance for boundary reward/cost shaping makes the agent look close to
+        a boundary everywhere when the nominal flight height is below the xy
+        safety margin.  Keep z in the hard workspace check, but ignore it for
+        2D shaping/shield decisions unless explicitly requested.
+        """
+        current_position = self.dynamic_model.get_position()
+        margins = [
+            current_position[0] - self.work_space_x[0],
+            self.work_space_x[1] - current_position[0],
+            current_position[1] - self.work_space_y[0],
+            self.work_space_y[1] - current_position[1],
+        ]
+        if include_z is None:
+            include_z = bool(getattr(self.dynamic_model, 'navigation_3d', False))
+        if include_z:
+            margins.extend([
+                current_position[2] - self.work_space_z[0],
+                self.work_space_z[1] - current_position[2],
+            ])
+        return float(min(margins))
 
     def is_not_inside_workspace(self):
         """
@@ -966,6 +1254,8 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
 # ! -----------used for plot or show states------------------------------------------------------------------
 
     def print_train_info_airsim(self, action, obs, reward, info):
+        if not self.print_train_info:
+            return
         # if self.perception_type == 'split' or self.perception_type == 'lgmd':
         #     feature_all = self.feature_all
         # elif self.perception_type == 'vector':
