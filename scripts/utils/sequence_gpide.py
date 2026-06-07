@@ -570,6 +570,9 @@ class SequenceGPIDESACAgent:
         self.safety_speed_scale = _cfg_get(cfg, "safety", "speed_scale", 0.45, float)
         self.safety_min_forward_speed = _cfg_get(cfg, "safety", "min_forward_speed", float(self.action_low_np[0]), float)
         self.safety_goal_turn_bias = _cfg_get(cfg, "safety", "goal_turn_bias", 0.35, float)
+        self.safety_vertical_goal_bias = _cfg_get(cfg, "safety", "vertical_goal_bias", 0.25, float)
+        self.navigation_3d = bool(getattr(getattr(env, "dynamic_model", None), "navigation_3d",
+                                          _cfg_get(cfg, "options", "navigation_3d", False, bool)))
 
     @property
     def alpha(self):
@@ -645,10 +648,15 @@ class SequenceGPIDESACAgent:
         # In image coordinates, obstacle on left -> turn right.  When both sides
         # are similarly occupied, bias the shield toward the goal yaw encoded in
         # the state features so avoidance does not systematically drive the UAV
-        # away from the target or out of bounds.
+        # away from the target or out of bounds.  The state layout differs between
+        # 2D ([distance, yaw]) and 3D ([distance_xy, distance_z, yaw]), so using
+        # depth_splits + 1 for every task accidentally read vertical error as yaw
+        # in 3D and could turn the aircraft away from the goal during avoidance.
         obstacle_turn = -1.0 if left > right else 1.0
         turn_sign = obstacle_turn
-        yaw_feature_idx = self.vectorizer.depth_splits + 1
+        state_start = self.vectorizer.depth_splits
+        vertical_feature_idx = state_start + 1 if self.navigation_3d else None
+        yaw_feature_idx = state_start + (2 if self.navigation_3d else 1)
         if len(obs_vec) > yaw_feature_idx:
             relative_yaw_norm = float(np.clip(obs_vec[yaw_feature_idx], 0.0, 1.0))
             relative_yaw = (relative_yaw_norm - 0.5) * 2.0
@@ -664,6 +672,15 @@ class SequenceGPIDESACAgent:
         # never reaches the goal before max_episode_steps.
         protected[0] = max(self.action_low_np[0], self.safety_min_forward_speed,
                            protected[0] * self.safety_speed_scale)
+        if self.navigation_3d and self.act_dim >= 3 and vertical_feature_idx is not None and len(obs_vec) > vertical_feature_idx:
+            vertical_error = (float(np.clip(obs_vec[vertical_feature_idx], 0.0, 1.0)) - 0.5) * 2.0
+            if abs(vertical_error) > 0.05:
+                # state_raw[1] is current_z - goal_z.  Positive means the UAV is
+                # above the goal, so the desired vertical velocity is downward.
+                goal_vz = -np.sign(vertical_error) * float(self.action_high_np[1])
+                protected[1] = (1.0 - self.safety_vertical_goal_bias) * protected[1] + \
+                    self.safety_vertical_goal_bias * goal_vz
+                protected[1] = np.clip(protected[1], self.action_low_np[1], self.action_high_np[1])
         protected[-1] = np.clip(protected[-1] + turn_sign * self.safety_yaw_bias *
                                 float(self.action_high_np[-1]), self.action_low_np[-1], self.action_high_np[-1])
         return protected.astype(np.float32)

@@ -1117,11 +1117,20 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
         if self.work_space_y[1] - position[1] < shield_margin:
             outward_score = max(outward_score, forward_y)
 
-        if outward_score <= 0.0:
+        z_outward_score = 0.0
+        if getattr(self.dynamic_model, 'navigation_3d', False) and action_arr.size >= 3:
+            z_speed_span = max(float(getattr(self.dynamic_model, 'v_z_max', 1.0)), 1e-6)
+            if position[2] - self.work_space_z[0] < shield_margin and action_arr[1] < 0.0:
+                z_outward_score = max(z_outward_score, float(-action_arr[1]) / z_speed_span)
+            if self.work_space_z[1] - position[2] < shield_margin and action_arr[1] > 0.0:
+                z_outward_score = max(z_outward_score, float(action_arr[1]) / z_speed_span)
+
+        if outward_score <= 0.0 and z_outward_score <= 0.0:
             self._boundary_shield_info = {
                 'boundary_shield_active': 0,
                 'boundary_shield_margin': float(margin),
                 'boundary_outward_score': float(outward_score),
+                'boundary_z_outward_score': float(z_outward_score),
             }
             return action_arr
 
@@ -1137,15 +1146,26 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
         shield_speed = self._cfg_getfloat('safety', 'boundary_shield_speed', 1.0)
         yaw_gain = self._cfg_getfloat('safety', 'boundary_shield_yaw_gain', 1.5)
         action_arr[0] = min(float(action_arr[0]), max(float(self.dynamic_model.v_xy_min), shield_speed))
-        action_arr[-1] = np.clip(
-            yaw_gain * yaw_error,
-            -self.dynamic_model.yaw_rate_max_rad,
-            self.dynamic_model.yaw_rate_max_rad,
-        )
+        if outward_score > 0.0:
+            action_arr[-1] = np.clip(
+                yaw_gain * yaw_error,
+                -self.dynamic_model.yaw_rate_max_rad,
+                self.dynamic_model.yaw_rate_max_rad,
+            )
+        if z_outward_score > 0.0 and getattr(self.dynamic_model, 'navigation_3d', False) and action_arr.size >= 3:
+            z_center = 0.5 * (self.work_space_z[0] + self.work_space_z[1])
+            z_direction = np.sign(z_center - position[2])
+            z_shield_speed = self._cfg_getfloat('safety', 'boundary_shield_z_speed', 0.5)
+            action_arr[1] = np.clip(
+                z_direction * z_shield_speed,
+                -self.dynamic_model.v_z_max,
+                self.dynamic_model.v_z_max,
+            )
         self._boundary_shield_info = {
             'boundary_shield_active': 1,
             'boundary_shield_margin': float(margin),
             'boundary_outward_score': float(outward_score),
+            'boundary_z_outward_score': float(z_outward_score),
             'boundary_shield_yaw_error_deg': float(math.degrees(yaw_error)),
         }
         return action_arr.astype(np.float32)
