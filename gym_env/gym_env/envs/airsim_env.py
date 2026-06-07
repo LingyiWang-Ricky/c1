@@ -237,6 +237,8 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
         self._apply_goal_curriculum()
         self.dynamic_model.reset()
         self._current_step_info = None
+        self._position_before_action = None
+        self._goal_capture_info = {}
         self._obstacle_shield_info = {}
         self._boundary_shield_info = {}
 
@@ -307,6 +309,8 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
                     base_z_min, self.dynamic_model.goal_z_offset_range)
 
     def step(self, action):
+        self._position_before_action = self.dynamic_model.get_position()
+        action = self.apply_goal_capture_shield(action)
         action = self.apply_obstacle_shield(action)
         action = self.apply_boundary_shield(action)
         # set action
@@ -1225,9 +1229,70 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
             'min_distance_to_obstacles': min_distance,
             'no_progress_steps': int(getattr(self, 'no_progress_steps', 0)),
             'best_distance_to_goal': float(getattr(self, 'best_distance_to_goal', self.get_distance_to_goal_3d())),
+            **getattr(self, '_goal_capture_info', {}),
             **getattr(self, '_obstacle_shield_info', {}),
             **getattr(self, '_boundary_shield_info', {}),
         })
+
+
+    def apply_goal_capture_shield(self, action):
+        """Prioritize capture when the vehicle is already near the goal.
+
+        SimpleMultirotor cannot command a zero forward speed, so a policy that is
+        close to the target can still fly through the acceptance area between two
+        simulator ticks or be turned away by obstacle/boundary shields.  This
+        optional local controller only activates inside a small capture radius:
+        it slows to minimum speed, points yaw toward the goal, and biases vertical
+        speed toward the goal altitude.
+        """
+        self._goal_capture_info = {'goal_capture_active': 0}
+        enabled = self.cfg.getboolean('safety', 'goal_capture_shield_enabled', fallback=False)
+        action_arr = np.asarray(action, dtype=np.float32).copy()
+        if not enabled or self.dynamic_name != 'SimpleMultirotor' or action_arr.size < 2:
+            return action_arr
+
+        current_position = self.dynamic_model.get_position()
+        goal_position = self.dynamic_model.goal_position
+        dx = float(goal_position[0] - current_position[0])
+        dy = float(goal_position[1] - current_position[1])
+        horizontal_distance = math.hypot(dx, dy)
+        capture_radius = self._cfg_getfloat('safety', 'goal_capture_radius', self.accept_radius * 2.0)
+        if horizontal_distance > capture_radius:
+            return action_arr
+
+        desired_yaw = math.atan2(dy, dx)
+        yaw_error = desired_yaw - self.dynamic_model.get_attitude()[2]
+        if yaw_error > math.pi:
+            yaw_error -= 2 * math.pi
+        elif yaw_error < -math.pi:
+            yaw_error += 2 * math.pi
+
+        yaw_gain = self._cfg_getfloat('safety', 'goal_capture_yaw_gain', 2.0)
+        action_arr[0] = float(self.dynamic_model.v_xy_min)
+        action_arr[-1] = np.clip(
+            yaw_gain * yaw_error,
+            -self.dynamic_model.yaw_rate_max_rad,
+            self.dynamic_model.yaw_rate_max_rad,
+        )
+
+        if getattr(self.dynamic_model, 'navigation_3d', False) and action_arr.size >= 3:
+            z_error = float(goal_position[2] - current_position[2])
+            z_gain = self._cfg_getfloat('safety', 'goal_capture_z_gain', 0.8)
+            action_arr[1] = np.clip(
+                z_gain * z_error,
+                -self.dynamic_model.v_z_max,
+                self.dynamic_model.v_z_max,
+            )
+        else:
+            z_error = 0.0
+
+        self._goal_capture_info = {
+            'goal_capture_active': 1,
+            'goal_capture_horizontal_distance': float(horizontal_distance),
+            'goal_capture_yaw_error_deg': float(math.degrees(yaw_error)),
+            'goal_capture_z_error': float(z_error),
+        }
+        return action_arr.astype(np.float32)
 
     def apply_obstacle_shield(self, action):
         """Bias exploration away from close frontal depth obstacles.
@@ -1243,6 +1308,8 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
         action_arr = np.asarray(action, dtype=np.float32).copy()
         self._obstacle_shield_info = {'obstacle_shield_active': 0}
         if not enabled or self.dynamic_name != 'SimpleMultirotor' or action_arr.size < 2:
+            return action_arr
+        if getattr(self, '_goal_capture_info', {}).get('goal_capture_active'):
             return action_arr
 
         depth_image = getattr(self, 'last_depth_image', None)
@@ -1338,6 +1405,9 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
 
         action_arr = np.asarray(action, dtype=np.float32).copy()
         if action_arr.size < 2:
+            return action_arr
+        if getattr(self, '_goal_capture_info', {}).get('goal_capture_active'):
+            self._boundary_shield_info = {'boundary_shield_active': 0}
             return action_arr
 
         position = self.dynamic_model.get_position()
@@ -1480,11 +1550,70 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
         return is_not_inside
 
     def is_in_desired_pose(self):
-        in_desired_pose = False
-        if self.get_distance_to_goal_3d() < self.accept_radius:
-            in_desired_pose = True
+        """Check goal capture using point and last-step segment distance.
 
-        return in_desired_pose
+        Using only the current 3D point can miss close goals when the
+        SimpleMultirotor moves through the acceptance region between two 0.2 s
+        ticks, especially because it always has a positive forward-speed lower
+        bound.  Treat horizontal and vertical tolerances separately for 3D, then
+        also check the swept segment from the previous position to the current
+        position.
+        """
+        current_position = np.asarray(self.dynamic_model.get_position(), dtype=np.float32)
+        goal_position = np.asarray(self.dynamic_model.goal_position, dtype=np.float32)
+        point_success, point_metrics = self._is_goal_capture_position(current_position, goal_position)
+        segment_success, segment_metrics = self._is_goal_capture_segment(goal_position)
+        self._goal_capture_status = {
+            **point_metrics,
+            **segment_metrics,
+            'goal_capture_success_point': int(point_success),
+            'goal_capture_success_segment': int(segment_success),
+        }
+        return bool(point_success or segment_success)
+
+    def _is_goal_capture_position(self, position, goal_position):
+        horizontal_distance = float(np.linalg.norm(position[:2] - goal_position[:2]))
+        vertical_error = float(abs(position[2] - goal_position[2]))
+        distance_3d = float(np.linalg.norm(position - goal_position))
+        if getattr(self.dynamic_model, 'navigation_3d', False):
+            accept_z_radius = self._cfg_getfloat('environment', 'accept_z_radius', self.accept_radius)
+            success = horizontal_distance <= self.accept_radius and vertical_error <= accept_z_radius
+        else:
+            accept_z_radius = float('inf')
+            success = horizontal_distance <= self.accept_radius
+        return bool(success), {
+            'goal_horizontal_distance': horizontal_distance,
+            'goal_vertical_error': vertical_error,
+            'goal_distance_3d': distance_3d,
+            'accept_z_radius': float(accept_z_radius),
+        }
+
+    def _is_goal_capture_segment(self, goal_position):
+        previous_position = getattr(self, '_position_before_action', None)
+        if previous_position is None:
+            return False, {'goal_segment_distance': float('inf')}
+
+        previous = np.asarray(previous_position, dtype=np.float32)
+        current = np.asarray(self.dynamic_model.get_position(), dtype=np.float32)
+        delta_xy = current[:2] - previous[:2]
+        segment_len_sq = float(np.dot(delta_xy, delta_xy))
+        if segment_len_sq <= 1e-9:
+            closest = current
+        else:
+            t = float(np.clip(np.dot(goal_position[:2] - previous[:2], delta_xy) / segment_len_sq, 0.0, 1.0))
+            closest = previous + t * (current - previous)
+
+        horizontal_distance = float(np.linalg.norm(closest[:2] - goal_position[:2]))
+        vertical_error = float(abs(closest[2] - goal_position[2]))
+        if getattr(self.dynamic_model, 'navigation_3d', False):
+            accept_z_radius = self._cfg_getfloat('environment', 'accept_z_radius', self.accept_radius)
+            success = horizontal_distance <= self.accept_radius and vertical_error <= accept_z_radius
+        else:
+            success = horizontal_distance <= self.accept_radius
+        return bool(success), {
+            'goal_segment_distance': horizontal_distance,
+            'goal_segment_vertical_error': vertical_error,
+        }
 
     def is_crashed(self):
         is_crashed = False
