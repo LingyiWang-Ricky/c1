@@ -1,0 +1,19 @@
+Index: configs/config_NH_center_SimpleMultirotor_2D.ini
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>[options]\r\nenv_name = NH_center\r\ndynamic_name = SimpleMultirotor\r\n\r\nnavigation_3d = False\r\nusing_velocity_state = False\r\nreward_type = reward_final\r\n\r\n;depth, lgmd, vector\r\nperception = vector\r\n\r\nalgo = SAC\r\n; Enable the custom GPIDE/FOCOPS sequence SAC path for this config.\r\ntemporal_encoder = gpide\r\ntotal_timesteps = 200000\r\n\r\npolicy_name = mlp\r\nnet_arch = [64, 32, 16]\r\nactivation_function = tanh\r\ncnn_feature_num = 25\r\n\r\nkeyboard_debug = False\r\n; Disable per-step AirSim HUD logging for faster training; CSV/JSON logs are still saved.\r\nprint_train_info = False\r\ngenerate_q_map = False\r\nq_map_save_steps = 1000\r\n\r\nuse_wandb = True\r\n\r\n[wandb]\r\nname = NH-SM-2D-GPIDE-FOCOPS-SAC-M1\r\nnotes = NH_center 2D vector training\r\n\r\n[environment]\r\nmax_depth_meters = 15\r\nscreen_height = 60\r\nscreen_width = 90\r\n; Number of bounded retries before falling back to the last valid AirSim image.\r\nimage_retry_count = 3\r\n\r\ncrash_distance = 1\r\naccept_radius = 2\r\n\r\n[multirotor]\r\ndt = 0.1\r\nacc_xy_max = 2.0\r\nv_xy_max = 5\r\nv_xy_min = 0.5\r\nv_z_max = 2.0 \r\nyaw_rate_max_deg = 30.0\r\n\r\n; configs for DRL algorithms\r\n[DRL]\r\ngamma = 0.99\r\nlearning_rate = 1e-3\r\nlearning_starts = 2000\r\nbuffer_size = 50000\r\nbatch_size = 1280\r\ntrain_freq = 500\r\ngradient_steps = 500\r\naction_noise_sigma = 0.1\r\n\r\n[GPIDE]\r\n; History length consumed by the custom sequence SAC encoder.\r\nseq_len = 16\r\nencoder_dim = 64\r\nembed_dim_per_head = 16\r\nattention_heads = 1\r\nintegral_heads = 1\r\nexp_smoothing_alphas = 0.25,0.5,1.0\r\ndecoder_hidden_size = 64\r\nobs_encode_dim = 32\r\nactor_hidden_sizes = 128,128\r\ncritic_hidden_sizes = 256,256\r\ndepth_splits = 5\r\nmax_grad_norm = 10.0\r\nuse_cuda = True\r\ntorch_num_threads = 1\r\n\r\n[FOCOPS]\r\n; FOCOPS-inspired safety/trust-region settings for the sequence SAC agent.\r\nenabled = True\r\ncost_gamma = 0.99\r\ncost_limit = 0.12\r\nnu = 0.0\r\nnu_lr = 0.01\r\nnu_max = 10.0\r\neta = 0.02\r\nkl_coef = 1.0\r\npolicy_snapshot_interval = 25\r\n
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/configs/config_NH_center_SimpleMultirotor_2D.ini b/configs/config_NH_center_SimpleMultirotor_2D.ini
+--- a/configs/config_NH_center_SimpleMultirotor_2D.ini	(revision 6c9680730f72b6aca59641f1b97f9783557185f2)
++++ b/configs/config_NH_center_SimpleMultirotor_2D.ini	(date 1780772844097)
+@@ -25,7 +25,7 @@
+ generate_q_map = False
+ q_map_save_steps = 1000
+ 
+-use_wandb = True
++use_wandb = False
+ 
+ [wandb]
+ name = NH-SM-2D-GPIDE-FOCOPS-SAC-M1

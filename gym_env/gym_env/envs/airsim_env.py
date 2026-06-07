@@ -1241,6 +1241,211 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
         }
         return action_arr.astype(np.float32)
 
+    def _update_stuck_status(self, current_distance, episode_step):
+        """Detect policies that spend many steps without reducing goal distance.
+
+        Long 1000-step episodes where the UAV circles or hovers provide weak SAC
+        feedback and slow down training.  This configurable early termination marks
+        those episodes as ``stuck`` so the policy receives an immediate terminal
+        penalty instead of wasting the full max_episode_steps budget.
+        """
+        enabled = self.cfg.getboolean('safety', 'stuck_check_enabled', fallback=False)
+        if not enabled:
+            return False
+
+        if getattr(self, '_last_stuck_check_step', -1) == episode_step:
+            return bool(getattr(self, '_last_is_stuck', False))
+        self._last_stuck_check_step = episode_step
+
+        max_no_progress_steps = self.cfg.getint('safety', 'max_no_progress_steps', fallback=200)
+        warmup_steps = self.cfg.getint('safety', 'stuck_warmup_steps', fallback=50)
+        min_progress = self._cfg_getfloat('safety', 'stuck_min_progress', 0.5)
+        best_distance = float(getattr(self, 'best_distance_to_goal', current_distance))
+        if current_distance < best_distance - min_progress:
+            self.best_distance_to_goal = float(current_distance)
+            self.no_progress_steps = 0
+        elif episode_step > warmup_steps:
+            self.no_progress_steps = int(getattr(self, 'no_progress_steps', 0)) + 1
+
+        is_stuck = int(getattr(self, 'no_progress_steps', 0)) >= max(1, max_no_progress_steps)
+        self._last_is_stuck = bool(is_stuck)
+        return bool(is_stuck)
+
+    def _add_constraint_info(self, info, action):
+        """Attach safety costs used by GPIDE/FOCOPS sequence SAC.
+
+        The sequence agent reads ``info['constraint_cost']`` as the cost target
+        for its FOCOPS-inspired cost critics.  Keep this independent from the
+        scalar reward so reward shaping and safety constraints can be tuned
+        separately.  Crash receives a terminal cost even if the obstacle distance
+        was not measurable on that step.
+        """
+        if info is None:
+            return
+
+        safe_distance = self._cfg_getfloat('constraint', 'safe_distance', self.crash_distance + 3.0)
+        crash_cost = self._cfg_getfloat('constraint', 'crash_cost', 1.0)
+        outside_cost = self._cfg_getfloat('constraint', 'outside_cost', 0.5)
+        max_steps_cost = self._cfg_getfloat('constraint', 'max_steps_cost', 0.3)
+        stuck_cost = self._cfg_getfloat('constraint', 'stuck_cost', max_steps_cost)
+        action_cost_coef = self._cfg_getfloat('constraint', 'action_cost_coef', 0.05)
+        yaw_cost_coef = self._cfg_getfloat('constraint', 'yaw_cost_coef', 0.05)
+        boundary_safe_margin = self._cfg_getfloat('constraint', 'boundary_safe_margin', 5.0)
+        boundary_cost_coef = self._cfg_getfloat('constraint', 'boundary_cost_coef', 0.3)
+
+        distance_margin = max(safe_distance - self.crash_distance, 1e-6)
+        min_distance = float(getattr(self, 'min_distance_to_obstacles', safe_distance))
+        if np.isfinite(min_distance):
+            obstacle_cost = 1.0 - np.clip((min_distance - self.crash_distance) / distance_margin, 0.0, 1.0)
+        else:
+            obstacle_cost = 0.0
+
+        action_arr = np.asarray(action, dtype=np.float32).reshape(-1)
+        if action_arr.size:
+            # Do not treat forward speed itself as unsafe, otherwise the safety
+            # critic can learn to prefer crawling or circling.  In 2D we use yaw
+            # effort; in 3D include vertical effort as well.
+            action_span = np.maximum(np.asarray(self.action_space.high, dtype=np.float32).reshape(-1), 1e-6)
+            controlled = [abs(action_arr[-1]) / action_span[-1]]
+            if getattr(self.dynamic_model, 'navigation_3d', False) and action_arr.size > 2:
+                controlled.append(abs(action_arr[1]) / action_span[1])
+            action_cost = float(np.clip(np.mean(controlled), 0.0, 1.0))
+        else:
+            action_cost = 0.0
+
+        yaw_error = 0.0
+        if hasattr(self.dynamic_model, 'state_raw') and len(self.dynamic_model.state_raw) > 2:
+            yaw_error = float(abs(self.dynamic_model.state_raw[2]) / 180.0)
+        yaw_error_cost = float(np.clip(yaw_error, 0.0, 1.0))
+        boundary_margin = self.get_workspace_margin()
+        boundary_cost = float(1.0 - np.clip(boundary_margin / max(boundary_safe_margin, 1e-6), 0.0, 1.0))
+
+        terminal_cost = 0.0
+        if info.get('is_crash'):
+            terminal_cost = crash_cost
+            obstacle_cost = max(float(obstacle_cost), crash_cost)
+        elif info.get('is_not_in_workspace'):
+            terminal_cost = outside_cost
+        elif info.get('is_stuck'):
+            terminal_cost = stuck_cost
+        elif info.get('is_max_steps') or info.get('is_timeout'):
+            terminal_cost = max_steps_cost
+
+        constraint_cost = max(
+            terminal_cost,
+            float(obstacle_cost) + action_cost_coef * action_cost + yaw_cost_coef * yaw_error_cost +
+            boundary_cost_coef * boundary_cost,
+        )
+        info.update({
+            'constraint_cost': float(np.clip(constraint_cost, 0.0, max(1.0, crash_cost))),
+            'obstacle_cost': float(np.clip(obstacle_cost, 0.0, max(1.0, crash_cost))),
+            'action_cost': action_cost,
+            'yaw_error_cost': yaw_error_cost,
+            'executed_action': np.asarray(action, dtype=np.float32).reshape(-1).tolist(),
+            'boundary_margin': float(boundary_margin),
+            'boundary_cost': boundary_cost,
+            'distance_to_goal': float(self.dynamic_model.goal_distance),
+            'current_distance_to_goal': float(self.get_distance_to_goal_3d()),
+            'relative_yaw_deg': float(self.dynamic_model.state_raw[2]) if hasattr(self.dynamic_model, 'state_raw') and len(self.dynamic_model.state_raw) > 2 else 0.0,
+            'min_distance_to_obstacles': min_distance,
+            'no_progress_steps': int(getattr(self, 'no_progress_steps', 0)),
+            'best_distance_to_goal': float(getattr(self, 'best_distance_to_goal', self.get_distance_to_goal_3d())),
+            **getattr(self, '_boundary_shield_info', {}),
+        })
+
+    def apply_boundary_shield(self, action):
+        """Limit outward actions near workspace boundaries.
+
+        Reward penalties alone often arrive too late: early exploration may cross
+        the boundary before the policy learns the cost.  This light-weight guard
+        only activates close to the workspace edge and when the commanded forward
+        direction points outward.
+        """
+        self._boundary_shield_info = {}
+        enabled = self.cfg.getboolean('safety', 'boundary_shield_enabled', fallback=False)
+        if not enabled or self.dynamic_name != 'SimpleMultirotor':
+            return action
+
+        action_arr = np.asarray(action, dtype=np.float32).copy()
+        if action_arr.size < 2:
+            return action_arr
+
+        margin = self.get_workspace_margin()
+        shield_margin = self._cfg_getfloat('safety', 'boundary_shield_margin', 10.0)
+        if margin >= shield_margin:
+            self._boundary_shield_info = {
+                'boundary_shield_active': 0,
+                'boundary_shield_margin': float(margin),
+            }
+            return action_arr
+
+        position = self.dynamic_model.get_position()
+        yaw = self.dynamic_model.get_attitude()[2]
+        forward_x = math.cos(yaw)
+        forward_y = math.sin(yaw)
+        outward_score = 0.0
+        if position[0] - self.work_space_x[0] < shield_margin:
+            outward_score = max(outward_score, -forward_x)
+        if self.work_space_x[1] - position[0] < shield_margin:
+            outward_score = max(outward_score, forward_x)
+        if position[1] - self.work_space_y[0] < shield_margin:
+            outward_score = max(outward_score, -forward_y)
+        if self.work_space_y[1] - position[1] < shield_margin:
+            outward_score = max(outward_score, forward_y)
+
+        z_outward_score = 0.0
+        if getattr(self.dynamic_model, 'navigation_3d', False) and action_arr.size >= 3:
+            z_speed_span = max(float(getattr(self.dynamic_model, 'v_z_max', 1.0)), 1e-6)
+            if position[2] - self.work_space_z[0] < shield_margin and action_arr[1] < 0.0:
+                z_outward_score = max(z_outward_score, float(-action_arr[1]) / z_speed_span)
+            if self.work_space_z[1] - position[2] < shield_margin and action_arr[1] > 0.0:
+                z_outward_score = max(z_outward_score, float(action_arr[1]) / z_speed_span)
+
+        if outward_score <= 0.0 and z_outward_score <= 0.0:
+            self._boundary_shield_info = {
+                'boundary_shield_active': 0,
+                'boundary_shield_margin': float(margin),
+                'boundary_outward_score': float(outward_score),
+                'boundary_z_outward_score': float(z_outward_score),
+            }
+            return action_arr
+
+        center_x = 0.5 * (self.work_space_x[0] + self.work_space_x[1])
+        center_y = 0.5 * (self.work_space_y[0] + self.work_space_y[1])
+        desired_yaw = math.atan2(center_y - position[1], center_x - position[0])
+        yaw_error = desired_yaw - yaw
+        if yaw_error > math.pi:
+            yaw_error -= 2 * math.pi
+        elif yaw_error < -math.pi:
+            yaw_error += 2 * math.pi
+
+        shield_speed = self._cfg_getfloat('safety', 'boundary_shield_speed', 1.0)
+        yaw_gain = self._cfg_getfloat('safety', 'boundary_shield_yaw_gain', 1.5)
+        action_arr[0] = min(float(action_arr[0]), max(float(self.dynamic_model.v_xy_min), shield_speed))
+        if outward_score > 0.0:
+            action_arr[-1] = np.clip(
+                yaw_gain * yaw_error,
+                -self.dynamic_model.yaw_rate_max_rad,
+                self.dynamic_model.yaw_rate_max_rad,
+            )
+        if z_outward_score > 0.0 and getattr(self.dynamic_model, 'navigation_3d', False) and action_arr.size >= 3:
+            z_center = 0.5 * (self.work_space_z[0] + self.work_space_z[1])
+            z_direction = np.sign(z_center - position[2])
+            z_shield_speed = self._cfg_getfloat('safety', 'boundary_shield_z_speed', 0.5)
+            action_arr[1] = np.clip(
+                z_direction * z_shield_speed,
+                -self.dynamic_model.v_z_max,
+                self.dynamic_model.v_z_max,
+            )
+        self._boundary_shield_info = {
+            'boundary_shield_active': 1,
+            'boundary_shield_margin': float(margin),
+            'boundary_outward_score': float(outward_score),
+            'boundary_z_outward_score': float(z_outward_score),
+            'boundary_shield_yaw_error_deg': float(math.degrees(yaw_error)),
+        }
+        return action_arr.astype(np.float32)
+
     def _cfg_getfloat(self, section, option, default):
         try:
             return self.cfg.getfloat(section, option)
