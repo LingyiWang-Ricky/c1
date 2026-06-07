@@ -154,6 +154,7 @@ class TrainingThread(QtCore.QThread):
         if is_sequence_gpide_enabled(self.cfg):
             algo = self.cfg.get('options', 'algo')
             print('algo: ', algo)
+            print('ablation_mode: ', self.cfg.get('options', 'ablation_mode', fallback='legacy'))
             print('temporal_encoder: GPIDE sequence')
             model = build_sequence_agent(self.cfg, self.env)
             self.env.model = model
@@ -226,6 +227,7 @@ class TrainingThread(QtCore.QThread):
         #! ---------------------------------algorithm selection-------------------------------------
         algo = self.cfg.get('options', 'algo')
         print('algo: ', algo)
+        print('ablation_mode: ', self.cfg.get('options', 'ablation_mode', fallback='legacy'))
         if algo == 'PPO':
             model = PPO(
                 policy_base,
