@@ -3,6 +3,8 @@ import numpy as np
 import math
 from gym import spaces
 
+from .airsim_client import get_airsim_endpoint, ensure_airsim_port_open
+
 class MultirotorDynamicsAirsim():
     '''
     A simple multirotor dynamics used for vision based navigation
@@ -18,8 +20,12 @@ class MultirotorDynamicsAirsim():
         self.dt = cfg.getfloat('multirotor', 'dt')
 
         # AirSim Client
-        self.airsim_port = cfg.getint('airsim', 'port', fallback=41451)
-        self.client = airsim.MultirotorClient(port=self.airsim_port)
+        self.airsim_ip, self.airsim_port, self.airsim_timeout = get_airsim_endpoint(cfg)
+        print('Connecting to AirSim at {}:{} (timeout={}s)'.format(
+            self.airsim_ip, self.airsim_port, self.airsim_timeout), flush=True)
+        ensure_airsim_port_open(self.airsim_ip, self.airsim_port, self.airsim_timeout)
+        self.client = airsim.MultirotorClient(
+            ip=self.airsim_ip, port=self.airsim_port, timeout_value=self.airsim_timeout)
         self.client.confirmConnection()
         try:
             self.client.enableApiControl(True)

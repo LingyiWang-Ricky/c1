@@ -3,6 +3,8 @@ import numpy as np
 import math
 from gym import spaces
 
+from .airsim_client import get_airsim_endpoint, ensure_airsim_port_open
+
 
 class FixedwingDynamicsSimple():
     '''
@@ -19,8 +21,12 @@ class FixedwingDynamicsSimple():
         self.dt = cfg.getfloat('fixedwing', 'dt')
 
         # AirSim Client
-        self.airsim_port = cfg.getint('airsim', 'port', fallback=41451)
-        self.client = airsim.VehicleClient(port=self.airsim_port)
+        self.airsim_ip, self.airsim_port, self.airsim_timeout = get_airsim_endpoint(cfg)
+        print('Connecting to AirSim at {}:{} (timeout={}s)'.format(
+            self.airsim_ip, self.airsim_port, self.airsim_timeout), flush=True)
+        ensure_airsim_port_open(self.airsim_ip, self.airsim_port, self.airsim_timeout)
+        self.client = airsim.VehicleClient(
+            ip=self.airsim_ip, port=self.airsim_port, timeout_value=self.airsim_timeout)
         self.client.confirmConnection()
 
         # states
