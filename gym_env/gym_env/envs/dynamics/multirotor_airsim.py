@@ -61,7 +61,12 @@ class MultirotorDynamicsAirsim():
         self.v_z_max = cfg.getfloat('multirotor', 'v_z_max')
         self.yaw_rate_max_deg = cfg.getfloat('multirotor', 'yaw_rate_max_deg')
         self.yaw_rate_max_rad = math.radians(self.yaw_rate_max_deg)
-        self.max_vertical_difference = 5
+        self.goal_z_offset_range = cfg.getfloat('multirotor', 'goal_z_offset_range', fallback=0.0)
+        self.goal_z_offset_min = cfg.getfloat('multirotor', 'goal_z_offset_min', fallback=0.0)
+        self.max_vertical_difference = cfg.getfloat(
+            'multirotor', 'max_vertical_difference',
+            fallback=max(5.0, abs(self.goal_z_offset_range))
+        )
         
         if self.navigation_3d:
             if self.using_velocity_state:
@@ -163,7 +168,13 @@ class MultirotorDynamicsAirsim():
             self.goal_distance = math.sqrt(goal_x*goal_x + goal_y*goal_y)
         self.goal_position[0] = goal_x
         self.goal_position[1] = goal_y
-        self.goal_position[2] = self.start_position[2]
+        goal_z = self.start_position[2]
+        if self.navigation_3d and self.goal_z_offset_range > 0:
+            offset_min = min(abs(self.goal_z_offset_min), abs(self.goal_z_offset_range))
+            offset_abs = offset_min + (abs(self.goal_z_offset_range) - offset_min) * np.random.random()
+            offset_sign = -1.0 if np.random.random() < 0.5 else 1.0
+            goal_z = self.start_position[2] + offset_sign * offset_abs
+        self.goal_position[2] = goal_z
         # print('New goal pose: ', self.goal_position)
 
     def set_start(self, position, random_angle, angle_offset=0.0):
