@@ -19,7 +19,8 @@ class FixedwingDynamicsSimple():
         self.dt = cfg.getfloat('fixedwing', 'dt')
 
         # AirSim Client
-        self.client = airsim.VehicleClient()
+        self.airsim_port = cfg.getint('airsim', 'port', fallback=41451)
+        self.client = airsim.VehicleClient(port=self.airsim_port)
         self.client.confirmConnection()
 
         # states
