@@ -215,6 +215,8 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
                                                 dtype=np.uint8)
 
         self.action_space = self.dynamic_model.action_space
+        self.max_episode_steps = cfg.getint(
+            'environment', 'max_episode_steps', fallback=self.max_episode_steps)
         self._goal_curriculum_base_distance = getattr(self.dynamic_model, 'goal_distance', None)
         if hasattr(self.dynamic_model, 'goal_z_offset_range'):
             self._goal_curriculum_base_z_offset_range = self.dynamic_model.goal_z_offset_range
