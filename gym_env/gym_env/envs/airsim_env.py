@@ -226,8 +226,13 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
         self.episode_num += 1
         self.step_num = 0
         self.cumulated_episode_reward = 0
-        self.dynamic_model.goal_distance = self.dynamic_model.get_distance_to_goal_2d()
-        self.previous_distance_from_des_point = self.dynamic_model.goal_distance
+        initial_distance = self.get_distance_to_goal_3d() if getattr(self.dynamic_model, 'navigation_3d', False) \
+            else self.dynamic_model.get_distance_to_goal_2d()
+        self.dynamic_model.goal_distance = max(float(initial_distance), 1e-6)
+        self.previous_distance_from_des_point = float(initial_distance)
+        self.best_distance_to_goal = float(initial_distance)
+        self.no_progress_steps = 0
+        self._last_stuck_check_step = -1
 
         self.trajectory_list = []
 
@@ -689,6 +694,8 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
                 reward = reward_outside
             elif terminal_info.get('is_success'):
                 reward = reward_reach
+            elif terminal_info.get('is_stuck'):
+                reward = self._cfg_getfloat('reward', 'reward_stuck', reward_timeout)
             elif terminal_info.get('is_timeout') or terminal_info.get('is_max_steps'):
                 reward = reward_timeout
 
@@ -973,16 +980,20 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
         is_crash = self.is_crashed()
         is_not_in_workspace = self.is_not_inside_workspace()
         episode_step = self.step_num + 1
+        current_distance = float(self.get_distance_to_goal_3d())
+        is_stuck = self._update_stuck_status(current_distance, episode_step)
         # This is a max-episode/search-step termination, not wall-clock runtime.
         is_max_steps = episode_step >= self.max_episode_steps
         is_timeout = is_max_steps  # Backward-compatible alias used by older logs/configs.
-        done = is_crash or is_not_in_workspace or is_success or is_max_steps
+        done = is_crash or is_not_in_workspace or is_success or is_max_steps or is_stuck
         if is_crash:
             done_reason = 'crash'
         elif is_not_in_workspace:
             done_reason = 'outside'
         elif is_success:
             done_reason = 'success'
+        elif is_stuck:
+            done_reason = 'stuck'
         elif is_max_steps:
             done_reason = 'max_steps'
         else:
@@ -993,12 +1004,46 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
             'is_not_in_workspace': is_not_in_workspace,
             'is_timeout': is_timeout,
             'is_max_steps': is_max_steps,
+            'is_stuck': is_stuck,
             'done_reason': done_reason,
             'done': done,
             'step_num': episode_step,
             'episode_step': episode_step,
-            'max_episode_steps': self.max_episode_steps
+            'max_episode_steps': self.max_episode_steps,
+            'no_progress_steps': int(getattr(self, 'no_progress_steps', 0)),
+            'best_distance_to_goal': float(getattr(self, 'best_distance_to_goal', current_distance)),
+            'current_distance_to_goal': current_distance,
         }
+
+    def _update_stuck_status(self, current_distance, episode_step):
+        """Detect policies that spend many steps without reducing goal distance.
+
+        Long 1000-step episodes where the UAV circles or hovers provide weak SAC
+        feedback and slow down training.  This configurable early termination marks
+        those episodes as ``stuck`` so the policy receives an immediate terminal
+        penalty instead of wasting the full max_episode_steps budget.
+        """
+        enabled = self.cfg.getboolean('safety', 'stuck_check_enabled', fallback=False)
+        if not enabled:
+            return False
+
+        if getattr(self, '_last_stuck_check_step', -1) == episode_step:
+            return bool(getattr(self, '_last_is_stuck', False))
+        self._last_stuck_check_step = episode_step
+
+        max_no_progress_steps = self.cfg.getint('safety', 'max_no_progress_steps', fallback=200)
+        warmup_steps = self.cfg.getint('safety', 'stuck_warmup_steps', fallback=50)
+        min_progress = self._cfg_getfloat('safety', 'stuck_min_progress', 0.5)
+        best_distance = float(getattr(self, 'best_distance_to_goal', current_distance))
+        if current_distance < best_distance - min_progress:
+            self.best_distance_to_goal = float(current_distance)
+            self.no_progress_steps = 0
+        elif episode_step > warmup_steps:
+            self.no_progress_steps = int(getattr(self, 'no_progress_steps', 0)) + 1
+
+        is_stuck = int(getattr(self, 'no_progress_steps', 0)) >= max(1, max_no_progress_steps)
+        self._last_is_stuck = bool(is_stuck)
+        return bool(is_stuck)
 
     def _add_constraint_info(self, info, action):
         """Attach safety costs used by GPIDE/FOCOPS sequence SAC.
@@ -1016,6 +1061,7 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
         crash_cost = self._cfg_getfloat('constraint', 'crash_cost', 1.0)
         outside_cost = self._cfg_getfloat('constraint', 'outside_cost', 0.5)
         max_steps_cost = self._cfg_getfloat('constraint', 'max_steps_cost', 0.3)
+        stuck_cost = self._cfg_getfloat('constraint', 'stuck_cost', max_steps_cost)
         action_cost_coef = self._cfg_getfloat('constraint', 'action_cost_coef', 0.05)
         yaw_cost_coef = self._cfg_getfloat('constraint', 'yaw_cost_coef', 0.05)
         boundary_safe_margin = self._cfg_getfloat('constraint', 'boundary_safe_margin', 5.0)
@@ -1054,6 +1100,8 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
             obstacle_cost = max(float(obstacle_cost), crash_cost)
         elif info.get('is_not_in_workspace'):
             terminal_cost = outside_cost
+        elif info.get('is_stuck'):
+            terminal_cost = stuck_cost
         elif info.get('is_max_steps') or info.get('is_timeout'):
             terminal_cost = max_steps_cost
 
@@ -1074,6 +1122,8 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
             'current_distance_to_goal': float(self.get_distance_to_goal_3d()),
             'relative_yaw_deg': float(self.dynamic_model.state_raw[2]) if hasattr(self.dynamic_model, 'state_raw') and len(self.dynamic_model.state_raw) > 2 else 0.0,
             'min_distance_to_obstacles': min_distance,
+            'no_progress_steps': int(getattr(self, 'no_progress_steps', 0)),
+            'best_distance_to_goal': float(getattr(self, 'best_distance_to_goal', self.get_distance_to_goal_3d())),
             **getattr(self, '_boundary_shield_info', {}),
         })
 

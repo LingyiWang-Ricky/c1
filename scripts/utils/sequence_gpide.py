@@ -561,6 +561,7 @@ class SequenceGPIDESACAgent:
         self.crash_episodes = 0
         self.timeout_episodes = 0
         self.outside_episodes = 0
+        self.stuck_episodes = 0
         self.latest_episode_summary: Optional[Dict[str, object]] = None
         self.last_stats = TrainStats()
 
@@ -825,6 +826,7 @@ class SequenceGPIDESACAgent:
             "crash_rate": self.crash_episodes / denom,
             "timeout_rate": self.timeout_episodes / denom,
             "outside_rate": self.outside_episodes / denom,
+            "stuck_rate": self.stuck_episodes / denom,
         }
 
     def _episode_summary(self, info: Optional[Dict]) -> Dict[str, object]:
@@ -832,9 +834,10 @@ class SequenceGPIDESACAgent:
         is_success = reason == "success" or self._info_bool(info, "is_success")
         is_crash = reason == "crash" or self._info_bool(info, "is_crash")
         is_outside = reason == "outside" or self._info_bool(info, "is_not_in_workspace")
+        is_stuck = reason == "stuck" or self._info_bool(info, "is_stuck")
         is_timeout = reason in ("timeout", "max_steps") or (
             (self._info_bool(info, "is_timeout") or self._info_bool(info, "is_max_steps"))
-            and not is_success and not is_crash and not is_outside
+            and not is_success and not is_crash and not is_outside and not is_stuck
         )
 
         # Keep the rate buckets mutually exclusive using the environment's done reason
@@ -843,22 +846,26 @@ class SequenceGPIDESACAgent:
         # the target or ending earlier for another terminal reason.
         if is_crash:
             reason = "crash"
-            is_success = is_timeout = is_outside = False
+            is_success = is_timeout = is_outside = is_stuck = False
         elif is_outside:
             reason = "outside"
-            is_success = is_crash = is_timeout = False
+            is_success = is_crash = is_timeout = is_stuck = False
         elif is_success:
             reason = "success"
-            is_crash = is_timeout = is_outside = False
+            is_crash = is_timeout = is_outside = is_stuck = False
+        elif is_stuck:
+            reason = "stuck"
+            is_success = is_crash = is_timeout = is_outside = False
         elif is_timeout:
             reason = "max_steps"
-            is_success = is_crash = is_outside = False
+            is_success = is_crash = is_outside = is_stuck = False
 
         self.completed_episodes += 1
         self.success_episodes += int(is_success)
         self.crash_episodes += int(is_crash)
         self.timeout_episodes += int(is_timeout)
         self.outside_episodes += int(is_outside)
+        self.stuck_episodes += int(is_stuck)
         rates = self._episode_rates()
         return {
             "episode": self.episode_num,
@@ -871,6 +878,7 @@ class SequenceGPIDESACAgent:
             "is_crash": int(is_crash),
             "is_timeout": int(is_timeout),
             "is_max_steps": int(is_timeout),
+            "is_stuck": int(is_stuck),
             "max_episode_steps": info.get("max_episode_steps", "") if isinstance(info, dict) else "",
             "is_outside": int(is_outside),
             **rates,
@@ -890,8 +898,8 @@ class SequenceGPIDESACAgent:
         self._write_header(csv_path, [
             "total_step", "episode", "episode_step", "reward", "episode_reward", "cost",
             "episode_cost", "done", "done_reason", "is_success", "is_crash", "is_timeout",
-            "is_max_steps", "max_episode_steps", "is_outside", "success_rate",
-            "crash_rate", "timeout_rate", "outside_rate", "distance_progress",
+            "is_max_steps", "is_stuck", "max_episode_steps", "is_outside", "success_rate",
+            "crash_rate", "timeout_rate", "outside_rate", "stuck_rate", "distance_progress",
             "progress_penalty", "reverse_progress_penalty", "low_speed_penalty",
             "heading_alignment", "heading_reward", "heading_error_penalty",
             "boundary_margin", "boundary_cost", "boundary_penalty", "path_distance", "path_penalty",
@@ -903,9 +911,9 @@ class SequenceGPIDESACAgent:
     def _write_episode_csv_header(self, csv_path: str):
         self._write_header(csv_path, [
             "episode", "total_step", "episode_len", "episode_reward", "episode_cost",
-            "done_reason", "is_success", "is_crash", "is_timeout", "is_max_steps",
+            "done_reason", "is_success", "is_crash", "is_timeout", "is_max_steps", "is_stuck",
             "max_episode_steps", "is_outside",
-            "success_rate", "crash_rate", "timeout_rate", "outside_rate",
+            "success_rate", "crash_rate", "timeout_rate", "outside_rate", "stuck_rate",
             "q1_loss", "q2_loss", "critic_loss", "actor_loss", "alpha_loss", "cost_loss",
             "alpha", "nu", "kl"
         ])
@@ -923,9 +931,10 @@ class SequenceGPIDESACAgent:
                 cost, self.episode_cost, int(done), self._info_text(info, "done_reason"),
                 int(self._info_bool(info, "is_success")), int(self._info_bool(info, "is_crash")),
                 int(self._info_bool(info, "is_timeout")), int(self._info_bool(info, "is_max_steps")),
+                int(self._info_bool(info, "is_stuck")),
                 info.get("max_episode_steps", "") if isinstance(info, dict) else "",
                 int(self._info_bool(info, "is_not_in_workspace")),
-                rates["success_rate"], rates["crash_rate"], rates["timeout_rate"], rates["outside_rate"],
+                rates["success_rate"], rates["crash_rate"], rates["timeout_rate"], rates["outside_rate"], rates["stuck_rate"],
                 info.get("distance_progress", "") if isinstance(info, dict) else "",
                 info.get("progress_penalty", "") if isinstance(info, dict) else "",
                 info.get("reverse_progress_penalty", "") if isinstance(info, dict) else "",
@@ -956,9 +965,9 @@ class SequenceGPIDESACAgent:
             writer.writerow([
                 summary["episode"], summary["total_step"], summary["episode_len"],
                 summary["episode_reward"], summary["episode_cost"], summary["done_reason"],
-                summary["is_success"], summary["is_crash"], summary["is_timeout"], summary["is_max_steps"],
+                summary["is_success"], summary["is_crash"], summary["is_timeout"], summary["is_max_steps"], summary["is_stuck"],
                 summary["max_episode_steps"], summary["is_outside"],
-                summary["success_rate"], summary["crash_rate"], summary["timeout_rate"], summary["outside_rate"],
+                summary["success_rate"], summary["crash_rate"], summary["timeout_rate"], summary["outside_rate"], summary["stuck_rate"],
                 self.last_stats.q1_loss, self.last_stats.q2_loss, q_loss, self.last_stats.actor_loss,
                 self.last_stats.alpha_loss, self.last_stats.cost_loss, self.last_stats.alpha,
                 self.last_stats.nu, self.last_stats.kl,
@@ -977,6 +986,7 @@ class SequenceGPIDESACAgent:
             "crash_episodes": self.crash_episodes,
             "timeout_episodes": self.timeout_episodes,
             "outside_episodes": self.outside_episodes,
+            "stuck_episodes": self.stuck_episodes,
             **self._episode_rates(),
             "last_stats": {
                 "q1_loss": self.last_stats.q1_loss,
@@ -1021,6 +1031,7 @@ class SequenceGPIDESACAgent:
         self.crash_episodes = 0
         self.timeout_episodes = 0
         self.outside_episodes = 0
+        self.stuck_episodes = 0
         self.latest_episode_summary = None
         self._write_csv_header(csv_path) if csv_path else None
         self._write_episode_csv_header(episode_csv_path) if episode_csv_path else None
@@ -1116,6 +1127,7 @@ class SequenceGPIDESACAgent:
                 "crash_episodes": self.crash_episodes,
                 "timeout_episodes": self.timeout_episodes,
                 "outside_episodes": self.outside_episodes,
+                "stuck_episodes": self.stuck_episodes,
                 **self._episode_rates(),
                 "latest_episode": self.latest_episode_summary,
             },
