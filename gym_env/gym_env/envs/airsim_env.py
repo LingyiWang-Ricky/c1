@@ -260,6 +260,7 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
         self.trajectory_list = []
 
         obs = self.get_obs()
+        self.previous_min_distance_to_obstacles = float(getattr(self, 'min_distance_to_obstacles', self.max_depth_meters))
 
         return obs
 
@@ -707,10 +708,13 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
 
             punishment_pose = punishment_xy + punishment_z
 
-            if self.min_distance_to_obstacles < 10:
-                punishment_obs = 1 - np.clip((self.min_distance_to_obstacles - self.crash_distance) / 5, 0, 1)
-            else:
-                punishment_obs = 0
+            obstacle_safe_distance = self._cfg_getfloat('reward', 'obstacle_safe_distance', 10.0)
+            obstacle_reward_power = self._cfg_getfloat('reward', 'obstacle_reward_power', 1.0)
+            obstacle_margin = max(obstacle_safe_distance - self.crash_distance, 1e-6)
+            punishment_obs = 0.0
+            if self.min_distance_to_obstacles < obstacle_safe_distance:
+                punishment_obs = 1.0 - np.clip((self.min_distance_to_obstacles - self.crash_distance) / obstacle_margin, 0.0, 1.0)
+                punishment_obs = float(np.power(punishment_obs, max(obstacle_reward_power, 1e-6)))
 
             punishment_action = 0
 
@@ -753,8 +757,15 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
                 self.previous_vertical_error = vertical_error
                 vertical_error_penalty = vertical_error_penalty_coef * np.clip(
                     vertical_error / max(float(self.dynamic_model.max_vertical_difference), 1e-6), 0.0, 1.0)
+            obstacle_clearance_reward_coef = self._cfg_getfloat('reward', 'obstacle_clearance_reward_coef', 0.0)
+            previous_obstacle_distance = float(getattr(self, 'previous_min_distance_to_obstacles', self.min_distance_to_obstacles))
+            obstacle_clearance_progress = float(self.min_distance_to_obstacles - previous_obstacle_distance)
+            self.previous_min_distance_to_obstacles = float(self.min_distance_to_obstacles)
+            obstacle_clearance_reward = 0.0
+            if self.min_distance_to_obstacles < obstacle_safe_distance:
+                obstacle_clearance_reward = obstacle_clearance_reward_coef * np.clip(obstacle_clearance_progress, -1.0, 1.0)
 
-            reward = reward_distance + vertical_reward_coef * vertical_progress + heading_reward - \
+            reward = reward_distance + vertical_reward_coef * vertical_progress + heading_reward + obstacle_clearance_reward - \
                 pose_penalty_coef * punishment_pose - obstacle_penalty_coef * punishment_obs - \
                 action_penalty_coef * punishment_action - yaw_penalty_coef * yaw_error_cost - \
                 step_penalty - progress_penalty - reverse_progress_penalty - low_speed_penalty - \
@@ -781,6 +792,8 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
                     'vertical_error': float(vertical_error),
                     'vertical_progress': float(vertical_progress),
                     'vertical_error_penalty': float(vertical_error_penalty),
+                    'obstacle_clearance_progress': float(obstacle_clearance_progress),
+                    'obstacle_clearance_reward': float(obstacle_clearance_reward),
                 })
         else:
             terminal_info = getattr(self, '_current_step_info', None) or self.get_done_info()
@@ -1165,9 +1178,11 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
         boundary_cost_coef = self._cfg_getfloat('constraint', 'boundary_cost_coef', 0.3)
 
         distance_margin = max(safe_distance - self.crash_distance, 1e-6)
+        obstacle_cost_power = self._cfg_getfloat('constraint', 'obstacle_cost_power', 1.0)
         min_distance = float(getattr(self, 'min_distance_to_obstacles', safe_distance))
         if np.isfinite(min_distance):
             obstacle_cost = 1.0 - np.clip((min_distance - self.crash_distance) / distance_margin, 0.0, 1.0)
+            obstacle_cost = float(np.power(obstacle_cost, max(obstacle_cost_power, 1e-6)))
         else:
             obstacle_cost = 0.0
 
@@ -1354,7 +1369,8 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
 
         left_clearance = float(np.nanpercentile(left, 30)) if left.size else front_min
         right_clearance = float(np.nanpercentile(right, 30)) if right.size else front_min
-        raw_side_sign = 1.0 if left_clearance >= right_clearance else -1.0
+        turn_clearance_sign = self._cfg_getfloat('safety', 'obstacle_turn_clearance_sign', 1.0)
+        raw_side_sign = turn_clearance_sign if left_clearance >= right_clearance else -turn_clearance_sign
 
         # Hold the same avoidance direction for a few steps.  In dense NH_center
         # streets a single depth frame can alternate between left/right as the
@@ -1421,6 +1437,7 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
             'obstacle_shield_right_clearance': right_clearance,
             'obstacle_shield_turn_sign': float(side_sign),
             'obstacle_shield_raw_turn_sign': float(raw_side_sign),
+            'obstacle_shield_turn_clearance_sign': float(turn_clearance_sign),
         }
         return action_arr.astype(np.float32)
 

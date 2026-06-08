@@ -617,7 +617,9 @@ class SequenceGPIDESACAgent:
         self.latest_episode_summary: Optional[Dict[str, object]] = None
         self.last_stats = TrainStats()
 
-        self.safety_shield = _cfg_get(cfg, "safety", "enabled", False, bool)
+        self.safety_shield = _cfg_get(
+            cfg, "safety", "agent_shield_enabled",
+            _cfg_get(cfg, "safety", "enabled", False, bool), bool)
         self.safety_threshold = _cfg_get(cfg, "safety", "front_obstacle_threshold", 0.65, float)
         self.safety_yaw_bias = _cfg_get(cfg, "safety", "yaw_rate_bias", 0.6, float)
         self.safety_speed_scale = _cfg_get(cfg, "safety", "speed_scale", 0.45, float)
