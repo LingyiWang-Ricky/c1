@@ -82,11 +82,63 @@ def _parse_int_list(value: str, default: Sequence[int]) -> List[int]:
         return list(default)
 
 
+def _ablation_mode(cfg) -> str:
+    """Return normalized SAC ablation mode without mutating the config."""
+    if not cfg.has_section("ablation") or not cfg.has_option("ablation", "mode"):
+        return ""
+    raw_mode = cfg.get("ablation", "mode").strip().lower()
+    mode_key = raw_mode.replace(" ", "").replace("-", "_")
+    aliases = {
+        "": "",
+        "none": "",
+        "default": "",
+        "sac": "sac",
+        "base_sac": "sac",
+        "baseline": "sac",
+        "sac_baseline": "sac",
+        "sac+innovation1": "sac_gpide",
+        "sac_innovation1": "sac_gpide",
+        "sac_pid": "sac_gpide",
+        "sac+创新点1": "sac_gpide",
+        "sac_创新点1": "sac_gpide",
+        "sac_gpide": "sac_gpide",
+        "gpide": "sac_gpide",
+        "pid": "sac_gpide",
+        "pid_inspired": "sac_gpide",
+        "innovation1": "sac_gpide",
+        "sac+innovation1+innovation2": "sac_gpide_focops",
+        "sac_innovation1_innovation2": "sac_gpide_focops",
+        "sac_pid_focops": "sac_gpide_focops",
+        "sac+创新点1+创新点2": "sac_gpide_focops",
+        "sac_创新点1_创新点2": "sac_gpide_focops",
+        "sac_gpide_focops": "sac_gpide_focops",
+        "gpide_focops": "sac_gpide_focops",
+        "focops": "sac_gpide_focops",
+        "innovation2": "sac_gpide_focops",
+    }
+    return aliases.get(mode_key, raw_mode)
+
+
 def is_sequence_gpide_enabled(cfg) -> bool:
-    """Return whether a config requests the GPIDE sequence encoder."""
+    """Return whether this config should run the PID/GPIDE sequence SAC."""
+    mode = _ablation_mode(cfg)
+    if mode == "sac":
+        return False
+    if mode in ("sac_gpide", "sac_gpide_focops"):
+        return True
     if not cfg.has_section("options") or not cfg.has_option("options", "temporal_encoder"):
         return False
     return cfg.get("options", "temporal_encoder").strip().lower() == "gpide"
+
+
+def is_focops_enabled(cfg) -> bool:
+    """Return whether the FOCOPS-inspired constraint terms are enabled."""
+    mode = _ablation_mode(cfg)
+    if mode == "sac_gpide":
+        return False
+    if mode == "sac_gpide_focops":
+        return True
+    return _cfg_get(cfg, "FOCOPS", "enabled", True, bool)
 
 
 class ObservationVectorizer:
@@ -518,7 +570,7 @@ class SequenceGPIDESACAgent:
                                       dtype=torch.float32, device=self.device, requires_grad=True)
         self.alpha_opt = torch.optim.Adam([self.log_alpha], lr=lr)
 
-        self.focops_enabled = _cfg_get(cfg, "FOCOPS", "enabled", True, bool)
+        self.focops_enabled = is_focops_enabled(cfg)
         self.c_gamma = _cfg_get(cfg, "FOCOPS", "cost_gamma", self.gamma, float)
         self.cost_limit = _cfg_get(cfg, "FOCOPS", "cost_limit", 0.12, float)
         self.nu = _cfg_get(cfg, "FOCOPS", "nu", 0.0, float)
