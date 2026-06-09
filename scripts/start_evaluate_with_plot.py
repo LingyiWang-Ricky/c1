@@ -13,6 +13,8 @@ if CURRENT_DIR not in sys.path:
     sys.path.insert(0, CURRENT_DIR)
 os.chdir(PROJECT_ROOT)
 
+from utils.config_loader import normalize_ablation_config
+
 
 def get_parser():
     parser = argparse.ArgumentParser(
@@ -53,6 +55,7 @@ def resolve_path(path):
 def is_sequence_gpide_config(config_file):
     cfg = ConfigParser()
     cfg.read(config_file)
+    normalize_ablation_config(cfg)
     if not cfg.has_section("options"):
         return False
     if not cfg.has_option("options", "temporal_encoder"):
