@@ -1288,7 +1288,8 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
         capture_active = horizontal_distance <= capture_radius
         if capture_active:
             yaw_gain = self._cfg_getfloat('safety', 'goal_capture_yaw_gain', 2.0)
-            action_arr[0] = float(self.dynamic_model.v_xy_min)
+            capture_speed = self._cfg_getfloat('safety', 'goal_capture_speed', float(self.dynamic_model.v_xy_min))
+            action_arr[0] = np.clip(capture_speed, self.dynamic_model.v_xy_min, self.dynamic_model.v_xy_max)
         else:
             yaw_gain = self._cfg_getfloat('safety', 'goal_approach_yaw_gain', 1.0)
             approach_speed = self._cfg_getfloat('safety', 'goal_approach_speed', float(action_arr[0]))
@@ -1339,9 +1340,11 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
         self._obstacle_shield_info = {'obstacle_shield_active': 0}
         if not enabled or self.dynamic_name != 'SimpleMultirotor' or action_arr.size < 2:
             return action_arr
-        if getattr(self, '_goal_capture_info', {}).get('goal_capture_active'):
-            return action_arr
-
+        # Do not skip obstacle checks during goal capture.  In NH_center 3D the
+        # final approach can pass close to trees/buildings; the previous behavior
+        # let goal_capture drive straight at minimum speed even when the full-frame
+        # depth was already at the crash threshold.  If no obstacle threshold is
+        # met below, the capture/approach action is returned unchanged.
         depth_image = getattr(self, 'last_depth_image', None)
         if depth_image is None:
             return action_arr
@@ -1393,21 +1396,6 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
         turn_clearance_sign = self._cfg_getfloat('safety', 'obstacle_turn_clearance_sign', 1.0)
         raw_side_sign = turn_clearance_sign if left_clearance >= right_clearance else -turn_clearance_sign
 
-        # Hold the same avoidance direction for a few steps.  In dense NH_center
-        # streets a single depth frame can alternate between left/right as the
-        # camera passes tree trunks; without hysteresis the shield dithers and the
-        # vehicle keeps flying into the obstacle corridor.
-        hold_steps = self.cfg.getint('safety', 'obstacle_shield_turn_hold_steps', fallback=8)
-        held_steps = int(getattr(self, '_obstacle_avoid_turn_steps', 0))
-        held_sign = float(getattr(self, '_obstacle_avoid_turn_sign', raw_side_sign))
-        if held_steps > 0:
-            side_sign = held_sign
-            self._obstacle_avoid_turn_steps = held_steps - 1
-        else:
-            side_sign = raw_side_sign
-            self._obstacle_avoid_turn_sign = side_sign
-            self._obstacle_avoid_turn_steps = max(0, hold_steps - 1)
-
         emergency_cfg = self._cfg_getfloat('safety', 'obstacle_emergency_threshold', 0.22)
         emergency_m = emergency_cfg * float(self.max_depth_meters) if emergency_cfg <= 1.0 else emergency_cfg
         emergency_active = nearest_for_activation <= emergency_m
@@ -1416,6 +1404,28 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
             (nearest_for_activation - emergency_m) / max(activation_threshold_m - emergency_m, 1e-6),
             0.0, 1.0)
 
+        # Hold the same avoidance direction for a few steps.  In dense NH_center
+        # streets a single depth frame can alternate between left/right as the
+        # camera passes tree trunks; without hysteresis the shield dithers.  When
+        # already in emergency, however, stale hysteresis must not keep turning
+        # toward the blocked side; trust the current clear-side estimate instead.
+        hold_steps = self.cfg.getint('safety', 'obstacle_shield_turn_hold_steps', fallback=8)
+        held_steps = int(getattr(self, '_obstacle_avoid_turn_steps', 0))
+        held_sign = float(getattr(self, '_obstacle_avoid_turn_sign', raw_side_sign))
+        turn_hold_overridden = False
+        if emergency_active and self.cfg.getboolean('safety', 'obstacle_emergency_break_turn_hold', fallback=True):
+            side_sign = raw_side_sign
+            self._obstacle_avoid_turn_sign = side_sign
+            self._obstacle_avoid_turn_steps = max(0, hold_steps - 1)
+            turn_hold_overridden = bool(held_steps > 0 and np.sign(held_sign) != np.sign(raw_side_sign))
+        elif held_steps > 0:
+            side_sign = held_sign
+            self._obstacle_avoid_turn_steps = held_steps - 1
+        else:
+            side_sign = raw_side_sign
+            self._obstacle_avoid_turn_sign = side_sign
+            self._obstacle_avoid_turn_steps = max(0, hold_steps - 1)
+
         min_shield_speed = self._cfg_getfloat('safety', 'obstacle_shield_min_speed', float(self.dynamic_model.v_xy_min))
         emergency_speed = self._cfg_getfloat('safety', 'obstacle_emergency_speed', min_shield_speed)
         speed_scale = self._cfg_getfloat('safety', 'speed_scale', 0.7)
@@ -1423,7 +1433,8 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
         target_speed = min_shield_speed + (1.0 - proximity) * max(0.0, scaled_policy_speed - min_shield_speed)
         if emergency_active:
             target_speed = min(target_speed, emergency_speed)
-        action_arr[0] = np.clip(target_speed, self.dynamic_model.v_xy_min, self.dynamic_model.v_xy_max)
+        min_speed_bound = min(float(self.dynamic_model.v_xy_min), float(emergency_speed)) if emergency_active else float(self.dynamic_model.v_xy_min)
+        action_arr[0] = np.clip(target_speed, min_speed_bound, self.dynamic_model.v_xy_max)
 
         yaw_bias = self._cfg_getfloat('safety', 'yaw_rate_bias', 1.0)
         emergency_yaw_bias = self._cfg_getfloat('safety', 'obstacle_emergency_yaw_rate_bias', yaw_bias)
@@ -1469,6 +1480,7 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
             'obstacle_shield_right_clearance': right_clearance,
             'obstacle_shield_turn_sign': float(side_sign),
             'obstacle_shield_raw_turn_sign': float(raw_side_sign),
+            'obstacle_shield_turn_hold_overridden': int(turn_hold_overridden),
             'obstacle_shield_turn_clearance_sign': float(turn_clearance_sign),
             'obstacle_shield_goal_blend': float(goal_blend),
         }
