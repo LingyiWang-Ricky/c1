@@ -52,6 +52,7 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
         self._goal_curriculum_base_distance = None
         self._goal_curriculum_base_z_offset_range = None
         self._goal_curriculum_base_z_offset_min = None
+        self._goal_curriculum_base_waypoint_max_distance = None
 
         # create LGMD agent
         if self.perception_type == 'lgmd':
@@ -78,8 +79,18 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
             goal_distance = 90
             self.dynamic_model.set_start(
                 start_position, random_angle=math.pi*2)
-            self.dynamic_model.set_goal(random_angle=math.pi*2, rect=goal_rect)
-            self._goal_curriculum_base_rect = list(goal_rect)
+            goal_mode = cfg.get('environment', 'goal_mode', fallback='rect').strip().lower()
+            goal_waypoints = self._parse_goal_waypoints(
+                cfg.get('environment', 'goal_waypoints', fallback=''))
+            if goal_mode == 'waypoints' and goal_waypoints and hasattr(self.dynamic_model, 'set_goal_waypoints'):
+                self.dynamic_model.set_goal_waypoints(goal_waypoints)
+                self._goal_curriculum_base_waypoint_max_distance = max(
+                    math.hypot(wp[0] - start_position[0], wp[1] - start_position[1])
+                    for wp in goal_waypoints
+                )
+            else:
+                self.dynamic_model.set_goal(random_angle=math.pi*2, rect=goal_rect)
+                self._goal_curriculum_base_rect = list(goal_rect)
             self.work_space_x = [-140, 140]
             self.work_space_y = [-140, 140]
             self.work_space_z = [0.5, 20]
@@ -265,6 +276,21 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
         return obs
 
 
+    def _parse_goal_waypoints(self, value):
+        """Parse semicolon-separated x,y waypoint pairs from config."""
+        waypoints = []
+        for item in (value or '').split(';'):
+            item = item.strip()
+            if not item:
+                continue
+            try:
+                coords = [float(part.strip()) for part in item.split(',') if part.strip()]
+            except ValueError:
+                continue
+            if len(coords) >= 2:
+                waypoints.append(coords[:2])
+        return waypoints
+
     def _apply_goal_curriculum(self):
         """Gradually expand goal difficulty for sparse AirSim maps.
 
@@ -292,6 +318,13 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
                 if sign != 0:
                     scaled[idx] = sign * max(abs(float(scaled[idx])), min_extent)
             self.dynamic_model.goal_rect = scaled.astype(float).tolist()
+
+        if self._goal_curriculum_base_waypoint_max_distance is not None and \
+                getattr(self.dynamic_model, 'goal_waypoints', None):
+            min_distance = self._cfg_getfloat('curriculum', 'min_goal_waypoint_distance',
+                                              self._cfg_getfloat('curriculum', 'min_goal_distance', 35.0))
+            self.dynamic_model.goal_waypoint_max_distance = max(
+                min_distance, float(self._goal_curriculum_base_waypoint_max_distance) * ratio)
 
         if self._goal_curriculum_base_distance is not None and getattr(self.dynamic_model, 'goal_rect', None) is None:
             min_distance = self._cfg_getfloat('curriculum', 'min_goal_distance', 35.0)
