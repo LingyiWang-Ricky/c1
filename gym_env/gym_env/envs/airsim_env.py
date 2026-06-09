@@ -1428,10 +1428,15 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
         yaw_bias = self._cfg_getfloat('safety', 'yaw_rate_bias', 1.0)
         emergency_yaw_bias = self._cfg_getfloat('safety', 'obstacle_emergency_yaw_rate_bias', yaw_bias)
         goal_turn_bias = self._cfg_getfloat('safety', 'goal_turn_bias', 0.0)
+        goal_min_blend = self._cfg_getfloat('safety', 'obstacle_goal_min_blend', 0.0)
         goal_yaw = 0.0
         if hasattr(self.dynamic_model, 'state_raw') and len(self.dynamic_model.state_raw) > 2:
             goal_yaw = float(np.clip(math.radians(self.dynamic_model.state_raw[2]), -1.0, 1.0))
-        yaw_cmd = side_sign * (emergency_yaw_bias if emergency_active else yaw_bias) + goal_turn_bias * goal_yaw * (1.0 - proximity)
+        goal_blend = 0.0 if emergency_active else max(goal_min_blend, 1.0 - proximity)
+        yaw_cmd = (
+            side_sign * (emergency_yaw_bias if emergency_active else yaw_bias) +
+            goal_turn_bias * goal_yaw * goal_blend
+        )
         action_arr[-1] = np.clip(
             yaw_cmd,
             -self.dynamic_model.yaw_rate_max_rad,
@@ -1465,6 +1470,7 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
             'obstacle_shield_turn_sign': float(side_sign),
             'obstacle_shield_raw_turn_sign': float(raw_side_sign),
             'obstacle_shield_turn_clearance_sign': float(turn_clearance_sign),
+            'obstacle_shield_goal_blend': float(goal_blend),
         }
         return action_arr.astype(np.float32)
 
