@@ -1339,9 +1339,11 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
         self._obstacle_shield_info = {'obstacle_shield_active': 0}
         if not enabled or self.dynamic_name != 'SimpleMultirotor' or action_arr.size < 2:
             return action_arr
-        if getattr(self, '_goal_capture_info', {}).get('goal_capture_active'):
-            return action_arr
-
+        # Do not skip obstacle checks during goal capture.  In NH_center 3D the
+        # final approach can pass close to trees/buildings; the previous behavior
+        # let goal_capture drive straight at minimum speed even when the full-frame
+        # depth was already at the crash threshold.  If no obstacle threshold is
+        # met below, the capture/approach action is returned unchanged.
         depth_image = getattr(self, 'last_depth_image', None)
         if depth_image is None:
             return action_arr
