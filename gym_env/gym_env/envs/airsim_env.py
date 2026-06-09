@@ -1274,7 +1274,8 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
         dy = float(goal_position[1] - current_position[1])
         horizontal_distance = math.hypot(dx, dy)
         capture_radius = self._cfg_getfloat('safety', 'goal_capture_radius', self.accept_radius * 2.0)
-        if horizontal_distance > capture_radius:
+        approach_radius = self._cfg_getfloat('safety', 'goal_approach_radius', capture_radius)
+        if horizontal_distance > approach_radius:
             return action_arr
 
         desired_yaw = math.atan2(dy, dx)
@@ -1284,8 +1285,18 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
         elif yaw_error < -math.pi:
             yaw_error += 2 * math.pi
 
-        yaw_gain = self._cfg_getfloat('safety', 'goal_capture_yaw_gain', 2.0)
-        action_arr[0] = float(self.dynamic_model.v_xy_min)
+        capture_active = horizontal_distance <= capture_radius
+        if capture_active:
+            yaw_gain = self._cfg_getfloat('safety', 'goal_capture_yaw_gain', 2.0)
+            action_arr[0] = float(self.dynamic_model.v_xy_min)
+        else:
+            yaw_gain = self._cfg_getfloat('safety', 'goal_approach_yaw_gain', 1.0)
+            approach_speed = self._cfg_getfloat('safety', 'goal_approach_speed', float(action_arr[0]))
+            action_arr[0] = np.clip(
+                min(float(action_arr[0]), approach_speed),
+                self.dynamic_model.v_xy_min,
+                self.dynamic_model.v_xy_max,
+            )
         action_arr[-1] = np.clip(
             yaw_gain * yaw_error,
             -self.dynamic_model.yaw_rate_max_rad,
@@ -1294,7 +1305,8 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
 
         if getattr(self.dynamic_model, 'navigation_3d', False) and action_arr.size >= 3:
             z_error = float(goal_position[2] - current_position[2])
-            z_gain = self._cfg_getfloat('safety', 'goal_capture_z_gain', 0.8)
+            z_gain = self._cfg_getfloat(
+                'safety', 'goal_capture_z_gain' if capture_active else 'goal_approach_z_gain', 0.8)
             action_arr[1] = np.clip(
                 z_gain * z_error,
                 -self.dynamic_model.v_z_max,
@@ -1304,7 +1316,8 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
             z_error = 0.0
 
         self._goal_capture_info = {
-            'goal_capture_active': 1,
+            'goal_capture_active': int(capture_active),
+            'goal_approach_active': int(not capture_active),
             'goal_capture_horizontal_distance': float(horizontal_distance),
             'goal_capture_yaw_error_deg': float(math.degrees(yaw_error)),
             'goal_capture_z_error': float(z_error),
@@ -1357,13 +1370,21 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
         right = depth[row0:row1, min(col1, w - 1):]
 
         front_min = float(np.nanmin(front)) if front.size else float(np.nanmin(finite_depth))
-        if not np.isfinite(front_min) or front_min >= threshold_m:
+        global_min = float(np.nanmin(finite_depth))
+        side_threshold_cfg = self._cfg_getfloat('safety', 'obstacle_side_threshold', threshold_cfg)
+        side_threshold_m = side_threshold_cfg * float(self.max_depth_meters) if side_threshold_cfg <= 1.0 else side_threshold_cfg
+        nearest_for_activation = min(front_min, global_min)
+        shield_should_activate = np.isfinite(front_min) and (
+            front_min < threshold_m or global_min < side_threshold_m)
+        if not shield_should_activate:
             self._obstacle_avoid_turn_sign = 0.0
             self._obstacle_avoid_turn_steps = 0
             self._obstacle_shield_info = {
                 'obstacle_shield_active': 0,
                 'obstacle_shield_front_min': front_min,
+                'obstacle_shield_global_min': global_min,
                 'obstacle_shield_threshold_m': float(threshold_m),
+                'obstacle_shield_side_threshold_m': float(side_threshold_m),
             }
             return action_arr
 
@@ -1389,8 +1410,11 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
 
         emergency_cfg = self._cfg_getfloat('safety', 'obstacle_emergency_threshold', 0.22)
         emergency_m = emergency_cfg * float(self.max_depth_meters) if emergency_cfg <= 1.0 else emergency_cfg
-        emergency_active = front_min <= emergency_m
-        proximity = 1.0 - np.clip((front_min - emergency_m) / max(threshold_m - emergency_m, 1e-6), 0.0, 1.0)
+        emergency_active = nearest_for_activation <= emergency_m
+        activation_threshold_m = threshold_m if front_min <= global_min else side_threshold_m
+        proximity = 1.0 - np.clip(
+            (nearest_for_activation - emergency_m) / max(activation_threshold_m - emergency_m, 1e-6),
+            0.0, 1.0)
 
         min_shield_speed = self._cfg_getfloat('safety', 'obstacle_shield_min_speed', float(self.dynamic_model.v_xy_min))
         emergency_speed = self._cfg_getfloat('safety', 'obstacle_emergency_speed', min_shield_speed)
@@ -1430,7 +1454,10 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
             'obstacle_shield_active': 1,
             'obstacle_shield_emergency_active': int(emergency_active),
             'obstacle_shield_front_min': front_min,
+            'obstacle_shield_global_min': global_min,
+            'obstacle_shield_nearest_for_activation': float(nearest_for_activation),
             'obstacle_shield_threshold_m': float(threshold_m),
+            'obstacle_shield_side_threshold_m': float(side_threshold_m),
             'obstacle_shield_emergency_threshold_m': float(emergency_m),
             'obstacle_shield_proximity': float(proximity),
             'obstacle_shield_left_clearance': left_clearance,
