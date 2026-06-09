@@ -83,7 +83,16 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
             goal_waypoints = self._parse_goal_waypoints(
                 cfg.get('environment', 'goal_waypoints', fallback=''))
             if goal_mode == 'waypoints' and goal_waypoints and hasattr(self.dynamic_model, 'set_goal_waypoints'):
-                self.dynamic_model.set_goal_waypoints(goal_waypoints)
+                goal_sampling = cfg.get('environment', 'goal_sampling', fallback='dynamic').strip().lower()
+                fixed_goal_index = cfg.getint('environment', 'fixed_goal_waypoint_index', fallback=0)
+                fixed_goal_position_list = self._parse_goal_waypoints(
+                    cfg.get('environment', 'fixed_goal_position', fallback=''))
+                fixed_goal_position = fixed_goal_position_list[0] if fixed_goal_position_list else None
+                self.dynamic_model.set_goal_waypoints(
+                    goal_waypoints,
+                    sampling=goal_sampling,
+                    fixed_index=fixed_goal_index,
+                    fixed_position=fixed_goal_position)
                 self._goal_curriculum_base_waypoint_max_distance = max(
                     math.hypot(wp[0] - start_position[0], wp[1] - start_position[1])
                     for wp in goal_waypoints

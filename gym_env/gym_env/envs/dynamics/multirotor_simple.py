@@ -48,6 +48,9 @@ class MultirotorDynamicsSimple():
         self.goal_rect = None
         self.goal_waypoints = None
         self.goal_waypoint_max_distance = None
+        self.goal_sampling = 'dynamic'
+        self.fixed_goal_waypoint_index = 0
+        self.fixed_goal_position = None
 
         # states
         self.x = 0
@@ -144,17 +147,24 @@ class MultirotorDynamicsSimple():
     def update_goal_pose(self):
         # if goal is given by waypoint mode, sample from configured road/lane
         # targets instead of arbitrary points that may be inside houses/trees.
-        if self.goal_waypoints:
-            waypoint_pool = self.goal_waypoints
-            if self.goal_waypoint_max_distance is not None:
-                max_distance = float(self.goal_waypoint_max_distance)
-                filtered = [
-                    wp for wp in waypoint_pool
-                    if math.hypot(wp[0] - self.start_position[0], wp[1] - self.start_position[1]) <= max_distance
-                ]
-                if filtered:
-                    waypoint_pool = filtered
-            idx = int(np.random.randint(0, len(waypoint_pool)))
+        if self.fixed_goal_position is not None:
+            goal_x, goal_y = self.fixed_goal_position[:2]
+            self.goal_distance = math.hypot(goal_x - self.start_position[0], goal_y - self.start_position[1])
+        elif self.goal_waypoints:
+            if self.goal_sampling == 'fixed':
+                waypoint_pool = self.goal_waypoints
+                idx = int(np.clip(self.fixed_goal_waypoint_index, 0, len(waypoint_pool) - 1))
+            else:
+                waypoint_pool = self.goal_waypoints
+                if self.goal_waypoint_max_distance is not None:
+                    max_distance = float(self.goal_waypoint_max_distance)
+                    filtered = [
+                        wp for wp in waypoint_pool
+                        if math.hypot(wp[0] - self.start_position[0], wp[1] - self.start_position[1]) <= max_distance
+                    ]
+                    if filtered:
+                        waypoint_pool = filtered
+                idx = int(np.random.randint(0, len(waypoint_pool)))
             goal_x, goal_y = waypoint_pool[idx]
             self.goal_distance = math.hypot(goal_x - self.start_position[0], goal_y - self.start_position[1])
         # if goal is given by rectangular mode
@@ -193,15 +203,22 @@ class MultirotorDynamicsSimple():
             self.goal_rect = rect
             self.goal_waypoints = None
 
-    def set_goal_waypoints(self, waypoints, max_distance=None):
+    def set_goal_waypoints(self, waypoints, max_distance=None, sampling='dynamic', fixed_index=0, fixed_position=None):
         self.goal_waypoints = [list(map(float, waypoint[:2])) for waypoint in waypoints]
         self.goal_waypoint_max_distance = max_distance
+        self.goal_sampling = str(sampling or 'dynamic').strip().lower()
+        self.fixed_goal_waypoint_index = int(fixed_index or 0)
+        self.fixed_goal_position = list(map(float, fixed_position[:2])) if fixed_position else None
         self.goal_rect = None
         if self.goal_waypoints:
             self.goal_distance = max(
                 math.hypot(wp[0] - self.start_position[0], wp[1] - self.start_position[1])
                 for wp in self.goal_waypoints
             )
+        if self.fixed_goal_position is not None:
+            self.goal_distance = math.hypot(
+                self.fixed_goal_position[0] - self.start_position[0],
+                self.fixed_goal_position[1] - self.start_position[1])
 
     def get_goal_from_rect(self, rect_set, random_angle_set):
         rect = rect_set
