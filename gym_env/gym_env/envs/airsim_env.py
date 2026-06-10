@@ -1403,7 +1403,19 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
         left_clearance = float(np.nanpercentile(left, 30)) if left.size else front_min
         right_clearance = float(np.nanpercentile(right, 30)) if right.size else front_min
         turn_clearance_sign = self._cfg_getfloat('safety', 'obstacle_turn_clearance_sign', 1.0)
-        raw_side_sign = turn_clearance_sign if left_clearance >= right_clearance else -turn_clearance_sign
+        clearance_delta = left_clearance - right_clearance
+        switch_margin_cfg = self._cfg_getfloat('safety', 'obstacle_turn_switch_margin', 0.8)
+        switch_margin_m = switch_margin_cfg * float(self.max_depth_meters) if switch_margin_cfg <= 1.0 else switch_margin_cfg
+        held_steps = int(getattr(self, '_obstacle_avoid_turn_steps', 0))
+        held_sign = float(getattr(self, '_obstacle_avoid_turn_sign', 0.0))
+        if abs(clearance_delta) <= switch_margin_m and held_steps > 0 and held_sign != 0.0:
+            raw_side_sign = held_sign
+        elif abs(clearance_delta) <= switch_margin_m:
+            goal_yaw_deg = float(getattr(self.dynamic_model, 'state_raw', [0.0, 0.0, 0.0])[2]) \
+                if hasattr(self.dynamic_model, 'state_raw') and len(self.dynamic_model.state_raw) > 2 else 0.0
+            raw_side_sign = np.sign(goal_yaw_deg) if abs(goal_yaw_deg) > 1.0 else turn_clearance_sign
+        else:
+            raw_side_sign = turn_clearance_sign if clearance_delta > 0.0 else -turn_clearance_sign
 
         emergency_cfg = self._cfg_getfloat('safety', 'obstacle_emergency_threshold', 0.22)
         emergency_m = emergency_cfg * float(self.max_depth_meters) if emergency_cfg <= 1.0 else emergency_cfg
@@ -1419,14 +1431,20 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
         # already in emergency, however, stale hysteresis must not keep turning
         # toward the blocked side; trust the current clear-side estimate instead.
         hold_steps = self.cfg.getint('safety', 'obstacle_shield_turn_hold_steps', fallback=8)
-        held_steps = int(getattr(self, '_obstacle_avoid_turn_steps', 0))
-        held_sign = float(getattr(self, '_obstacle_avoid_turn_sign', raw_side_sign))
         turn_hold_overridden = False
         if emergency_active and self.cfg.getboolean('safety', 'obstacle_emergency_break_turn_hold', fallback=True):
-            side_sign = raw_side_sign
+            if held_steps > 0 and held_sign != 0.0 and np.sign(held_sign) != np.sign(raw_side_sign):
+                held_clearance = left_clearance if np.sign(held_sign) == np.sign(turn_clearance_sign) else right_clearance
+                raw_clearance = left_clearance if np.sign(raw_side_sign) == np.sign(turn_clearance_sign) else right_clearance
+                if raw_clearance > held_clearance + switch_margin_m:
+                    side_sign = raw_side_sign
+                    turn_hold_overridden = True
+                else:
+                    side_sign = held_sign
+            else:
+                side_sign = raw_side_sign
             self._obstacle_avoid_turn_sign = side_sign
             self._obstacle_avoid_turn_steps = max(0, hold_steps - 1)
-            turn_hold_overridden = bool(held_steps > 0 and np.sign(held_sign) != np.sign(raw_side_sign))
         elif held_steps > 0:
             side_sign = held_sign
             self._obstacle_avoid_turn_steps = held_steps - 1
@@ -1491,6 +1509,8 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
             'obstacle_shield_raw_turn_sign': float(raw_side_sign),
             'obstacle_shield_turn_hold_overridden': int(turn_hold_overridden),
             'obstacle_shield_turn_clearance_sign': float(turn_clearance_sign),
+            'obstacle_shield_turn_switch_margin_m': float(switch_margin_m),
+            'obstacle_shield_clearance_delta': float(clearance_delta),
             'obstacle_shield_goal_blend': float(goal_blend),
         }
         return action_arr.astype(np.float32)
