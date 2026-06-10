@@ -46,6 +46,7 @@ class MultirotorDynamicsSimple():
         self.goal_random_angle = None
         self.goal_angle_offset = 0.0
         self.goal_rect = None
+        self.fixed_goal_position = None
 
         # states
         self.x = 0
@@ -140,6 +141,13 @@ class MultirotorDynamicsSimple():
         return 0
 
     def update_goal_pose(self):
+        if self.fixed_goal_position is not None:
+            self.goal_position = list(self.fixed_goal_position)
+            dx = self.goal_position[0] - self.start_position[0]
+            dy = self.goal_position[1] - self.start_position[1]
+            self.goal_distance = math.sqrt(dx * dx + dy * dy)
+            return
+
         # if goal is given by rectangular mode
         if self.goal_rect is None:
             distance = self.goal_distance
@@ -168,12 +176,22 @@ class MultirotorDynamicsSimple():
         self.start_angle_offset = angle_offset
 
     def set_goal(self, distance=None, random_angle=0, rect=None, angle_offset=0.0):
+        self.fixed_goal_position = None
         if distance is not None:
             self.goal_distance = distance
         self.goal_random_angle = random_angle
         self.goal_angle_offset = angle_offset
         if rect is not None:
             self.goal_rect = rect
+
+    def _set_goal_pose_single(self, goal):
+        self.fixed_goal_position = [float(goal[0]), float(goal[1]), float(goal[2])]
+        self.goal_position = list(self.fixed_goal_position)
+        self.goal_rect = None
+        self.goal_random_angle = 0
+        dx = self.goal_position[0] - self.start_position[0]
+        dy = self.goal_position[1] - self.start_position[1]
+        self.goal_distance = math.sqrt(dx * dx + dy * dy)
 
     def get_goal_from_rect(self, rect_set, random_angle_set):
         rect = rect_set
