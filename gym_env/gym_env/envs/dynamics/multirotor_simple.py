@@ -147,8 +147,11 @@ class MultirotorDynamicsSimple():
     def update_goal_pose(self):
         # if goal is given by waypoint mode, sample from configured road/lane
         # targets instead of arbitrary points that may be inside houses/trees.
+        fixed_goal_z = None
         if self.fixed_goal_position is not None:
             goal_x, goal_y = self.fixed_goal_position[:2]
+            if len(self.fixed_goal_position) >= 3:
+                fixed_goal_z = self.fixed_goal_position[2]
             self.goal_distance = math.hypot(goal_x - self.start_position[0], goal_y - self.start_position[1])
         elif self.goal_waypoints:
             if self.goal_sampling == 'fixed':
@@ -181,7 +184,9 @@ class MultirotorDynamicsSimple():
         self.goal_position[0] = goal_x
         self.goal_position[1] = goal_y
         goal_z = self.start_position[2]
-        if self.navigation_3d and self.goal_z_offset_range > 0:
+        if fixed_goal_z is not None:
+            goal_z = fixed_goal_z
+        elif self.navigation_3d and self.goal_z_offset_range > 0:
             offset_min = min(abs(self.goal_z_offset_min), abs(self.goal_z_offset_range))
             offset_abs = offset_min + (abs(self.goal_z_offset_range) - offset_min) * np.random.random()
             offset_sign = -1.0 if np.random.random() < 0.5 else 1.0
@@ -208,7 +213,7 @@ class MultirotorDynamicsSimple():
         self.goal_waypoint_max_distance = max_distance
         self.goal_sampling = str(sampling or 'dynamic').strip().lower()
         self.fixed_goal_waypoint_index = int(fixed_index or 0)
-        self.fixed_goal_position = list(map(float, fixed_position[:2])) if fixed_position else None
+        self.fixed_goal_position = list(map(float, fixed_position[:3])) if fixed_position else None
         self.goal_rect = None
         if self.goal_waypoints:
             self.goal_distance = max(
