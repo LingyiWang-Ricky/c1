@@ -286,7 +286,7 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
 
 
     def _parse_goal_waypoints(self, value):
-        """Parse semicolon-separated x,y waypoint pairs from config."""
+        """Parse semicolon-separated x,y or x,y,z waypoint pairs from config."""
         waypoints = []
         for item in (value or '').split(';'):
             item = item.strip()
@@ -297,7 +297,7 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
             except ValueError:
                 continue
             if len(coords) >= 2:
-                waypoints.append(coords[:2])
+                waypoints.append(coords[:3])
         return waypoints
 
     def _apply_goal_curriculum(self):
