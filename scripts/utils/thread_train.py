@@ -228,6 +228,13 @@ class TrainingThread(QtCore.QThread):
         algo = self.cfg.get('options', 'algo')
         print('algo: ', algo)
         print('ablation_mode: ', self.cfg.get('options', 'ablation_mode', fallback='legacy'))
+
+        def get_algo_float(section, option):
+            return self.cfg.getfloat(section, option, fallback=self.cfg.getfloat('DRL', option))
+
+        def get_algo_int(section, option):
+            return self.cfg.getint(section, option, fallback=self.cfg.getint('DRL', option))
+
         if algo == 'PPO':
             model = PPO(
                 policy_base,
@@ -262,22 +269,21 @@ class TrainingThread(QtCore.QThread):
         elif algo == 'TD3':
             # The noise objects for TD3
             n_actions = self.env.action_space.shape[-1]
-            noise_sigma = self.cfg.getfloat(
-                'DRL', 'action_noise_sigma') * np.ones(n_actions)
+            noise_sigma = get_algo_float('TD3', 'action_noise_sigma') * np.ones(n_actions)
             action_noise = NormalActionNoise(mean=np.zeros(n_actions),
                                              sigma=noise_sigma)
             model = TD3(
                 policy_base,
                 self.env,
                 action_noise=action_noise,
-                learning_rate=self.cfg.getfloat('DRL', 'learning_rate'),
-                gamma=self.cfg.getfloat('DRL', 'gamma'),
+                learning_rate=get_algo_float('TD3', 'learning_rate'),
+                gamma=get_algo_float('TD3', 'gamma'),
                 policy_kwargs=policy_kwargs,
-                learning_starts=self.cfg.getint('DRL', 'learning_starts'),
-                batch_size=self.cfg.getint('DRL', 'batch_size'),
-                train_freq=(self.cfg.getint('DRL', 'train_freq'), 'step'),
-                gradient_steps=self.cfg.getint('DRL', 'gradient_steps'),
-                buffer_size=self.cfg.getint('DRL', 'buffer_size'),
+                learning_starts=get_algo_int('TD3', 'learning_starts'),
+                batch_size=get_algo_int('TD3', 'batch_size'),
+                train_freq=(get_algo_int('TD3', 'train_freq'), 'step'),
+                gradient_steps=get_algo_int('TD3', 'gradient_steps'),
+                buffer_size=get_algo_int('TD3', 'buffer_size'),
                 tensorboard_log=log_path,
                 seed=0,
                 verbose=2)
