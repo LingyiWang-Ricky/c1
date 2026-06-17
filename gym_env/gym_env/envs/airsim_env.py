@@ -682,6 +682,8 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
         no_progress_penalty = self._cfg_getfloat('reward', 'no_progress_penalty', 0.0)
         progress_epsilon = self._cfg_getfloat('reward', 'progress_epsilon', 0.01)
         reverse_progress_penalty_coef = self._cfg_getfloat('reward', 'reverse_progress_penalty_coef', 0.0)
+        turn_without_progress_penalty_coef = self._cfg_getfloat(
+            'reward', 'turn_without_progress_penalty_coef', 0.0)
         min_forward_speed = self._cfg_getfloat('reward', 'min_forward_speed', 0.0)
         low_speed_penalty_coef = self._cfg_getfloat('reward', 'low_speed_penalty_coef', 0.0)
         heading_alignment_coef = self._cfg_getfloat('reward', 'heading_alignment_coef', 0.0)
@@ -744,8 +746,11 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
             heading_alignment = max(0.0, math.cos(math.radians(yaw_error)))
             heading_reward = heading_alignment_coef * heading_alignment
             heading_error_penalty = heading_error_penalty_coef * abs(yaw_error / 180.0)
-            progress_penalty = no_progress_penalty if distance_progress < progress_epsilon else 0.0
+            no_progress = distance_progress < progress_epsilon
+            progress_penalty = no_progress_penalty if no_progress else 0.0
             reverse_progress_penalty = reverse_progress_penalty_coef * max(0.0, -distance_progress)
+            turn_without_progress_penalty = (
+                turn_without_progress_penalty_coef * yaw_speed_cost if no_progress else 0.0)
             forward_speed = float(action[0]) if len(np.asarray(action).reshape(-1)) > 0 else 0.0
             low_speed_penalty = low_speed_penalty_coef * max(0.0, min_forward_speed - forward_speed)
             boundary_margin = self.get_workspace_margin(include_z=False)
@@ -778,13 +783,15 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
                 pose_penalty_coef * punishment_pose - obstacle_penalty_coef * punishment_obs - \
                 action_penalty_coef * punishment_action - yaw_penalty_coef * yaw_error_cost - \
                 step_penalty - progress_penalty - reverse_progress_penalty - low_speed_penalty - \
-                heading_error_penalty - boundary_penalty - path_penalty - vertical_error_penalty
+                turn_without_progress_penalty - heading_error_penalty - boundary_penalty - path_penalty - \
+                vertical_error_penalty
 
             if isinstance(getattr(self, '_current_step_info', None), dict):
                 self._current_step_info.update({
                     'distance_progress': float(distance_progress),
                     'progress_penalty': float(progress_penalty),
                     'reverse_progress_penalty': float(reverse_progress_penalty),
+                    'turn_without_progress_penalty': float(turn_without_progress_penalty),
                     'low_speed_penalty': float(low_speed_penalty),
                     'heading_alignment': float(heading_alignment),
                     'heading_reward': float(heading_reward),
@@ -1543,7 +1550,11 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
         action_arr = np.asarray(action, dtype=np.float32).copy()
         if action_arr.size < 2:
             return action_arr
-        if getattr(self, '_goal_capture_info', {}).get('goal_capture_active'):
+        goal_shield_info = getattr(self, '_goal_capture_info', {})
+        allow_goal_approach = self.cfg.getboolean(
+            'safety', 'boundary_shield_allow_goal_approach', fallback=True)
+        if goal_shield_info.get('goal_capture_active') or (
+                allow_goal_approach and goal_shield_info.get('goal_approach_active')):
             self._boundary_shield_info = {'boundary_shield_active': 0}
             return action_arr
 
