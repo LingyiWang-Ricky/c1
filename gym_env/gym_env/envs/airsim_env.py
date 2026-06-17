@@ -117,8 +117,8 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
             start_position = [0, 0, 50]
             goal_rect = [-220, -220, 220, 220]
             self.dynamic_model.set_start(start_position, random_angle=math.pi*2)
-            if hasattr(self.dynamic_model, '_set_goal_pose_single'):
-                # Fixed-wing dynamics randomize the start/goal rectangle at reset.
+            if self.dynamic_name == 'SimpleFixedwing':
+                # Keep the legacy fixed goal for the fixed-wing City_400 setup.
                 self.dynamic_model._set_goal_pose_single([200, -200, 50])
             else:
                 # Multirotor dynamics randomize the goal on the City_400 boundary.
@@ -1475,8 +1475,19 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
             side_sign * (emergency_yaw_bias if emergency_active else yaw_bias) +
             goal_turn_bias * goal_yaw * goal_blend
         )
+        yaw_blend_min = self._cfg_getfloat('safety', 'obstacle_shield_yaw_blend_min', 0.0)
+        yaw_blend = 1.0 if emergency_active else np.clip(
+            yaw_blend_min + (1.0 - yaw_blend_min) * proximity,
+            0.0,
+            1.0,
+        )
+        # Keep the shield corrective rather than fully overriding the policy when
+        # an obstacle is only barely inside the activation band.  The previous
+        # behavior wrote +/-yaw_rate_bias even when proximity was 0.0, which could
+        # make TD3 learn/execute long "turn in place" arcs in NH_center 3D.
+        blended_yaw_cmd = (1.0 - yaw_blend) * float(action_arr[-1]) + yaw_blend * yaw_cmd
         action_arr[-1] = np.clip(
-            yaw_cmd,
+            blended_yaw_cmd,
             -self.dynamic_model.yaw_rate_max_rad,
             self.dynamic_model.yaw_rate_max_rad,
         )
@@ -1512,6 +1523,7 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
             'obstacle_shield_turn_switch_margin_m': float(switch_margin_m),
             'obstacle_shield_clearance_delta': float(clearance_delta),
             'obstacle_shield_goal_blend': float(goal_blend),
+            'obstacle_shield_yaw_blend': float(yaw_blend),
         }
         return action_arr.astype(np.float32)
 
@@ -1593,8 +1605,8 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
 
         shield_speed = self._cfg_getfloat('safety', 'boundary_shield_speed', 1.0)
         yaw_gain = self._cfg_getfloat('safety', 'boundary_shield_yaw_gain', 1.5)
-        action_arr[0] = min(float(action_arr[0]), max(float(self.dynamic_model.v_xy_min), shield_speed))
         if outward_score > 0.0:
+            action_arr[0] = min(float(action_arr[0]), max(float(self.dynamic_model.v_xy_min), shield_speed))
             action_arr[-1] = np.clip(
                 yaw_gain * yaw_error,
                 -self.dynamic_model.yaw_rate_max_rad,
