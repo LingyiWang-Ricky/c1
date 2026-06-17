@@ -117,8 +117,8 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
             start_position = [0, 0, 50]
             goal_rect = [-220, -220, 220, 220]
             self.dynamic_model.set_start(start_position, random_angle=math.pi*2)
-            if hasattr(self.dynamic_model, '_set_goal_pose_single'):
-                # Fixed-wing dynamics randomize the start/goal rectangle at reset.
+            if self.dynamic_name == 'SimpleFixedwing':
+                # Keep the legacy fixed goal for the fixed-wing City_400 setup.
                 self.dynamic_model._set_goal_pose_single([200, -200, 50])
             else:
                 # Multirotor dynamics randomize the goal on the City_400 boundary.
