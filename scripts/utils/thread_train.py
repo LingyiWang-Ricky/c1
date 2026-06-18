@@ -39,9 +39,9 @@ else:
     from sequence_gpide import build_sequence_agent, is_sequence_gpide_enabled
 
 if __package__:
-    from .cpo_agent import CPOAgent
+    from .cpo_agent import CPOAgent, PPOLagrangianAgent
 else:
-    from cpo_agent import CPOAgent
+    from cpo_agent import CPOAgent, PPOLagrangianAgent
 
 
 class Tee:
@@ -231,6 +231,7 @@ class TrainingThread(QtCore.QThread):
 
         #! ---------------------------------algorithm selection-------------------------------------
         algo = self.cfg.get('options', 'algo')
+        algo_key = algo.strip().upper().replace('_', '-')
         print('algo: ', algo)
         print('ablation_mode: ', self.cfg.get('options', 'ablation_mode', fallback='legacy'))
 
@@ -292,8 +293,10 @@ class TrainingThread(QtCore.QThread):
                 tensorboard_log=log_path,
                 seed=0,
                 verbose=2)
-        elif algo == 'CPO':
+        elif algo_key == 'CPO':
             model = CPOAgent(self.env, self.cfg, policy_kwargs=policy_kwargs)
+        elif algo_key == 'PPO-LAGRANGIAN':
+            model = PPOLagrangianAgent(self.env, self.cfg, policy_kwargs=policy_kwargs)
         else:
             raise Exception('Invalid algo name : ', algo)
 
@@ -329,7 +332,12 @@ class TrainingThread(QtCore.QThread):
             model.learn(total_timesteps)
 
         #! ---------------------------model save----------------------------------------------------
-        model_name = 'model_cpo' if algo == 'CPO' else 'model_sb3'
+        if algo_key == 'CPO':
+            model_name = 'model_cpo'
+        elif algo_key == 'PPO-LAGRANGIAN':
+            model_name = 'model_ppo_lagrangian'
+        else:
+            model_name = 'model_sb3'
         model.save(model_path + '/' + model_name)
 
         print('training finished')

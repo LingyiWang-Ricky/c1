@@ -83,6 +83,8 @@ class CPOConfig:
 
 
 class CPOAgent:
+    config_section = "CPO"
+
     def __init__(self, env, cfg, policy_kwargs=None):
         self.env = env
         self.cfg = cfg
@@ -92,7 +94,8 @@ class CPOAgent:
         self.act_dim = int(np.prod(env.action_space.shape))
         self.obs_dim = int(np.prod(self.obs_shape))
 
-        hidden = _cfg_get(cfg, "CPO", "hidden_sizes", None, str)
+        section = self.config_section
+        hidden = _cfg_get(cfg, section, "hidden_sizes", None, str)
         if hidden:
             hidden_sizes = tuple(int(x.strip()) for x in hidden.split(",") if x.strip())
         elif policy_kwargs and "net_arch" in policy_kwargs:
@@ -105,22 +108,22 @@ class CPOAgent:
             activation = policy_kwargs["activation_fn"]
 
         self.hps = CPOConfig(
-            steps_per_epoch=_cfg_get(cfg, "CPO", "steps_per_epoch", 2048, int),
-            gamma=_cfg_get(cfg, "CPO", "gamma", _cfg_get(cfg, "DRL", "gamma", 0.99, float), float),
-            cost_gamma=_cfg_get(cfg, "CPO", "cost_gamma", 0.99, float),
-            lam=_cfg_get(cfg, "CPO", "lam", 0.95, float),
-            cost_lam=_cfg_get(cfg, "CPO", "cost_lam", 0.95, float),
-            pi_lr=_cfg_get(cfg, "CPO", "pi_lr", _cfg_get(cfg, "DRL", "learning_rate", 3e-4, float), float),
-            vf_lr=_cfg_get(cfg, "CPO", "vf_lr", 1e-3, float),
-            train_pi_iters=_cfg_get(cfg, "CPO", "train_pi_iters", 10, int),
-            train_v_iters=_cfg_get(cfg, "CPO", "train_v_iters", 40, int),
-            target_kl=_cfg_get(cfg, "CPO", "target_kl", 0.02, float),
-            clip_ratio=_cfg_get(cfg, "CPO", "clip_ratio", 0.2, float),
-            cost_limit=_cfg_get(cfg, "CPO", "cost_limit", 0.05, float),
-            lagrange_lr=_cfg_get(cfg, "CPO", "lagrange_lr", 0.05, float),
-            max_lagrange=_cfg_get(cfg, "CPO", "max_lagrange", 50.0, float),
+            steps_per_epoch=_cfg_get(cfg, section, "steps_per_epoch", 2048, int),
+            gamma=_cfg_get(cfg, section, "gamma", _cfg_get(cfg, "DRL", "gamma", 0.99, float), float),
+            cost_gamma=_cfg_get(cfg, section, "cost_gamma", 0.99, float),
+            lam=_cfg_get(cfg, section, "lam", 0.95, float),
+            cost_lam=_cfg_get(cfg, section, "cost_lam", 0.95, float),
+            pi_lr=_cfg_get(cfg, section, "pi_lr", _cfg_get(cfg, "DRL", "learning_rate", 3e-4, float), float),
+            vf_lr=_cfg_get(cfg, section, "vf_lr", 1e-3, float),
+            train_pi_iters=_cfg_get(cfg, section, "train_pi_iters", 10, int),
+            train_v_iters=_cfg_get(cfg, section, "train_v_iters", 40, int),
+            target_kl=_cfg_get(cfg, section, "target_kl", 0.02, float),
+            clip_ratio=_cfg_get(cfg, section, "clip_ratio", 0.2, float),
+            cost_limit=_cfg_get(cfg, section, "cost_limit", 0.05, float),
+            lagrange_lr=_cfg_get(cfg, section, "lagrange_lr", 0.05, float),
+            max_lagrange=_cfg_get(cfg, section, "max_lagrange", 50.0, float),
             hidden_sizes=hidden_sizes,
-            device=_cfg_get(cfg, "CPO", "device", "cuda" if th.cuda.is_available() else "cpu", str),
+            device=_cfg_get(cfg, section, "device", "cuda" if th.cuda.is_available() else "cpu", str),
         )
         self.device = th.device(self.hps.device if th.cuda.is_available() or self.hps.device == "cpu" else "cpu")
         self.ac = ActorCritic(self.obs_dim, self.act_dim, list(self.hps.hidden_sizes), activation).to(self.device)
@@ -306,3 +309,14 @@ class CPOAgent:
         agent.ac.load_state_dict(data["state_dict"])
         agent.lagrange = float(data.get("lagrange", 0.0))
         return agent
+
+
+class PPOLagrangianAgent(CPOAgent):
+    """PPO-Lagrangian variant from Safety Starter Agents' algorithm family.
+
+    It shares the clipped policy-gradient/Lagrangian update with ``CPOAgent`` but
+    reads hyperparameters from the ``[PPO-Lagrangian]`` config section and is
+    exposed under ``algo = PPO-Lagrangian``.
+    """
+
+    config_section = "PPO-Lagrangian"
