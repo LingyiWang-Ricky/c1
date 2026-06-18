@@ -30,6 +30,11 @@ if __package__:
 else:
     from sequence_gpide import is_sequence_gpide_enabled, load_sequence_agent
 
+if __package__:
+    from .cpo_agent import CPOAgent
+else:
+    from cpo_agent import CPOAgent
+
 
 def rule_based_policy(obs):
     '''
@@ -111,6 +116,8 @@ class EvaluateThread(QtCore.QThread):
             model = SAC.load(self.model_file, env=self.env)
         elif algo == 'PPO':
             model = PPO.load(self.model_file, env=self.env)
+        elif algo == 'CPO':
+            model = CPOAgent.load(self.model_file, self.env, self.cfg)
         else:
             raise Exception('algo set error {}'.format(algo))
         self.env.model = model

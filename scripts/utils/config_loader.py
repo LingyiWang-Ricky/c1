@@ -90,6 +90,16 @@ def normalize_ablation_config(cfg):
     if not cfg.has_section("FOCOPS"):
         cfg.add_section("FOCOPS")
 
+    requested_algo = cfg.get("options", "algo", fallback="SAC").strip().upper()
+    if requested_algo != "SAC":
+        # Ablation modes describe SAC/GPIDE/FOCOPS variants.  If the user selects
+        # another public algorithm (for example CPO), preserve that selection so
+        # changing only ``algo = CPO`` is enough to enter the requested branch.
+        cfg.set("options", "temporal_encoder", "none")
+        cfg.set("FOCOPS", "enabled", "False")
+        cfg.set("options", "ablation_mode", "disabled_for_{}".format(requested_algo.lower()))
+        return cfg
+
     # Keep the public algorithm as SAC for every ablation.  The temporal encoder
     # selects whether training uses SB3 SAC or the local sequence SAC variant.
     cfg.set("options", "algo", "SAC")
