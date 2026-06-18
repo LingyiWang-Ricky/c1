@@ -117,6 +117,40 @@ def normalize_ablation_config(cfg):
     return cfg
 
 
+def normalize_td3_config(cfg):
+    """Apply TD3-specific compatibility fixes to a loaded ConfigParser in-place.
+
+    The project SAC/GPIDE depth configs often use ``perception=depth`` together
+    with ``policy_name=mlp``.  With SB3 TD3 that means flattening the whole
+    60x90x2 image into an MLP while the goal direction is encoded in only a few
+    state pixels.  In practice TD3 quickly collapses to the local "do not move,
+    keep turning" policy because it cannot reliably read the target signal.
+
+    Unless the user explicitly opts out, route that combination through the
+    existing compact vector observation, which preserves depth-sector features
+    plus distance/yaw state in a small MLP-friendly input.
+    """
+    if not cfg.has_section("options"):
+        return cfg
+
+    algo = cfg.get("options", "algo", fallback="").strip().upper()
+    if algo != "TD3":
+        return cfg
+
+    perception = cfg.get("options", "perception", fallback="").strip().lower()
+    policy_name = cfg.get("options", "policy_name", fallback="").strip().lower()
+    keep_depth = cfg.getboolean("options", "td3_keep_depth_mlp", fallback=False)
+    if perception == "depth" and policy_name == "mlp" and not keep_depth:
+        cfg.set("options", "perception", "vector")
+        cfg.set("options", "td3_auto_vectorized", "True")
+        print(
+            "TD3 config adjustment: perception=depth with policy_name=mlp was "
+            "changed to perception=vector. Set options.td3_keep_depth_mlp=True "
+            "to keep the original flattened-depth MLP behavior."
+        )
+    return cfg
+
+
 def read_required_config(config_file):
     """Read a config file and fail early with an actionable error if invalid."""
     resolved_config = resolve_project_path(config_file)
@@ -136,4 +170,5 @@ def read_required_config(config_file):
             .format(resolved_config)
         )
     normalize_ablation_config(cfg)
+    normalize_td3_config(cfg)
     return cfg, resolved_config
