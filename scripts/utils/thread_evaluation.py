@@ -30,6 +30,11 @@ if __package__:
 else:
     from sequence_gpide import is_sequence_gpide_enabled, load_sequence_agent
 
+if __package__:
+    from .cpo_agent import CPOAgent, PPOLagrangianAgent
+else:
+    from cpo_agent import CPOAgent, PPOLagrangianAgent
+
 
 def rule_based_policy(obs):
     '''
@@ -102,6 +107,7 @@ class EvaluateThread(QtCore.QThread):
     def run_drl_model(self):
         print('start evaluation')
         algo = self.cfg.get('options', 'algo')
+        algo_key = algo.strip().upper().replace('_', '-')
         sequence_gpide = is_sequence_gpide_enabled(self.cfg)
         if sequence_gpide:
             model = load_sequence_agent(self.model_file, self.cfg, self.env)
@@ -111,6 +117,10 @@ class EvaluateThread(QtCore.QThread):
             model = SAC.load(self.model_file, env=self.env)
         elif algo == 'PPO':
             model = PPO.load(self.model_file, env=self.env)
+        elif algo_key == 'CPO':
+            model = CPOAgent.load(self.model_file, self.env, self.cfg)
+        elif algo_key == 'PPO-LAGRANGIAN':
+            model = PPOLagrangianAgent.load(self.model_file, self.env, self.cfg)
         else:
             raise Exception('algo set error {}'.format(algo))
         self.env.model = model
