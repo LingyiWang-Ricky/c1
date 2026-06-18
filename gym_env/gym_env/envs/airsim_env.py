@@ -252,6 +252,7 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
         self._obstacle_avoid_turn_sign = 0.0
         self._obstacle_avoid_turn_steps = 0
         self._boundary_shield_info = {}
+        self._anti_spin_info = {}
 
         self.episode_num += 1
         self.step_num = 0
@@ -325,6 +326,7 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
         action = self.apply_goal_capture_shield(action)
         action = self.apply_obstacle_shield(action)
         action = self.apply_boundary_shield(action)
+        action = self.apply_anti_spin_shield(action)
         # set action
         if self.dynamic_name == 'SimpleFixedwing':
             # add step to calculate pitch flap deg Fixed wing only
@@ -1265,6 +1267,7 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
             **getattr(self, '_goal_capture_info', {}),
             **getattr(self, '_obstacle_shield_info', {}),
             **getattr(self, '_boundary_shield_info', {}),
+            **getattr(self, '_anti_spin_info', {}),
         })
 
 
@@ -1639,6 +1642,52 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
             'boundary_z_outward_score': float(z_outward_score),
             'boundary_shield_z_margin': float(z_margin),
             'boundary_shield_yaw_error_deg': float(math.degrees(yaw_error)),
+        }
+        return action_arr.astype(np.float32)
+
+    def apply_anti_spin_shield(self, action):
+        """Prevent low-speed high-yaw actions from becoming an in-place spin.
+
+        TD3 can settle on the locally safe action "do not translate much, keep
+        rotating" before the critic has reliable long-horizon progress estimates.
+        Reward penalties only affect future updates; this optional guard makes
+        the executed action physically informative by enforcing forward motion
+        and capping yaw whenever the commanded action is both slow and spin-like.
+        """
+        self._anti_spin_info = {'anti_spin_shield_active': 0}
+        enabled = self.cfg.getboolean('safety', 'anti_spin_shield_enabled', fallback=False)
+        action_arr = np.asarray(action, dtype=np.float32).copy()
+        if not enabled or self.dynamic_name != 'SimpleMultirotor' or action_arr.size < 2:
+            return action_arr
+        if getattr(self, '_goal_capture_info', {}).get('goal_capture_active'):
+            return action_arr
+
+        speed_threshold = self._cfg_getfloat(
+            'safety', 'anti_spin_speed_threshold',
+            max(float(self.dynamic_model.v_xy_min), 1.0))
+        yaw_threshold_deg = self._cfg_getfloat('safety', 'anti_spin_yaw_threshold_deg', 30.0)
+        yaw_threshold = math.radians(yaw_threshold_deg)
+        forward_speed = float(action_arr[0])
+        yaw_rate = float(action_arr[-1])
+        if forward_speed > speed_threshold or abs(yaw_rate) < yaw_threshold:
+            self._anti_spin_info = {
+                'anti_spin_shield_active': 0,
+                'anti_spin_forward_speed': forward_speed,
+                'anti_spin_yaw_rate_deg': float(math.degrees(yaw_rate)),
+            }
+            return action_arr
+
+        min_speed = self._cfg_getfloat('safety', 'anti_spin_min_speed', speed_threshold)
+        yaw_limit_deg = self._cfg_getfloat('safety', 'anti_spin_yaw_limit_deg', yaw_threshold_deg)
+        yaw_limit = min(math.radians(yaw_limit_deg), float(self.dynamic_model.yaw_rate_max_rad))
+        action_arr[0] = np.clip(min_speed, self.dynamic_model.v_xy_min, self.dynamic_model.v_xy_max)
+        action_arr[-1] = np.clip(yaw_rate, -yaw_limit, yaw_limit)
+        self._anti_spin_info = {
+            'anti_spin_shield_active': 1,
+            'anti_spin_forward_speed': forward_speed,
+            'anti_spin_yaw_rate_deg': float(math.degrees(yaw_rate)),
+            'anti_spin_executed_speed': float(action_arr[0]),
+            'anti_spin_executed_yaw_rate_deg': float(math.degrees(float(action_arr[-1]))),
         }
         return action_arr.astype(np.float32)
 
