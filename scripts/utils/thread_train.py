@@ -21,7 +21,10 @@ import wandb
 from PyQt5 import QtCore
 import argparse
 import ast
+import csv
 import torch as th
+
+from stable_baselines3.common.callbacks import BaseCallback, CallbackList
 
 if __package__:
     from .config_loader import read_required_config
@@ -56,6 +59,77 @@ class Tee:
     def flush(self):
         for stream in self.streams:
             stream.flush()
+
+
+class AppendCsvCallback(BaseCallback):
+    """Append one training row to CSV on every SB3 environment step."""
+
+    columns = [
+        "total_step", "episode_step", "reward", "done", "done_reason",
+        "is_success", "is_crash", "is_timeout", "is_max_steps", "is_stuck",
+        "max_episode_steps", "is_outside", "constraint_cost",
+    ]
+
+    def __init__(self, csv_path, verbose=0):
+        super().__init__(verbose=verbose)
+        self.csv_path = csv_path
+        self.episode_step = 0
+
+    def _init_callback(self):
+        if not self.csv_path:
+            return
+        dirname = os.path.dirname(self.csv_path)
+        if dirname:
+            os.makedirs(dirname, exist_ok=True)
+        if not os.path.exists(self.csv_path):
+            with open(self.csv_path, "w", newline="", encoding="utf-8") as f:
+                csv.writer(f).writerow(self.columns)
+
+    @staticmethod
+    def _first_value(value, default=None):
+        if value is None:
+            return default
+        if isinstance(value, (list, tuple)):
+            return value[0] if value else default
+        if isinstance(value, np.ndarray):
+            return value.flat[0].item() if value.size else default
+        return value
+
+    @staticmethod
+    def _info_bool(info, key):
+        if not isinstance(info, dict):
+            return 0
+        if key == "is_outside":
+            return int(bool(info.get("is_outside", info.get("is_not_in_workspace", False))))
+        return int(bool(info.get(key, False)))
+
+    def _on_step(self):
+        if not self.csv_path:
+            return True
+        self.episode_step += 1
+        reward = self._first_value(self.locals.get("rewards"), 0.0)
+        done = bool(self._first_value(self.locals.get("dones"), False))
+        infos = self.locals.get("infos") or [{}]
+        info = infos[0] if isinstance(infos, (list, tuple)) and infos else {}
+        with open(self.csv_path, "a", newline="", encoding="utf-8") as f:
+            csv.writer(f).writerow([
+                self.num_timesteps,
+                self.episode_step,
+                float(reward),
+                int(done),
+                info.get("done_reason", "") if isinstance(info, dict) else "",
+                self._info_bool(info, "is_success"),
+                self._info_bool(info, "is_crash"),
+                self._info_bool(info, "is_timeout"),
+                self._info_bool(info, "is_max_steps"),
+                self._info_bool(info, "is_stuck"),
+                info.get("max_episode_steps", "") if isinstance(info, dict) else "",
+                self._info_bool(info, "is_outside"),
+                info.get("constraint_cost", "") if isinstance(info, dict) else "",
+            ])
+        if done:
+            self.episode_step = 0
+        return True
 
 
 def get_parser():
@@ -312,6 +386,7 @@ class TrainingThread(QtCore.QThread):
         total_timesteps = self.cfg.getint('options', 'total_timesteps')
         self.env.model = model
         self.env.data_path = data_path
+        csv_callback = AppendCsvCallback(os.path.join(data_path, 'training_log.csv'))
 
         if self.cfg.getboolean('options', 'use_wandb'):
             # if algo == 'TD3' or algo == 'SAC':
@@ -321,15 +396,18 @@ class TrainingThread(QtCore.QThread):
             model.learn(
                 total_timesteps,
                 log_interval=1,
-                callback=WandbCallback(
-                    model_save_freq=10000,
-                    gradient_save_freq=5000,
-                    model_save_path=model_path,
-                    verbose=2,
-                )
+                callback=CallbackList([
+                    csv_callback,
+                    WandbCallback(
+                        model_save_freq=10000,
+                        gradient_save_freq=5000,
+                        model_save_path=model_path,
+                        verbose=2,
+                    ),
+                ])
             )
         else:
-            model.learn(total_timesteps)
+            model.learn(total_timesteps, callback=csv_callback)
 
         #! ---------------------------model save----------------------------------------------------
         if algo_key == 'CPO':
@@ -342,6 +420,7 @@ class TrainingThread(QtCore.QThread):
 
         print('training finished')
         print('model saved to: {}'.format(model_path))
+        print('training data saved to: {}'.format(data_path))
 
 
 def main():
