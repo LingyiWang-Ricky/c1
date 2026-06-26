@@ -7,6 +7,7 @@ import gym
 import gym_env
 import numpy as np
 from stable_baselines3 import TD3, PPO, SAC
+from stable_baselines3.common.callbacks import CallbackList
 from stable_baselines3.common.noise import NormalActionNoise
 from wandb.integration.sb3 import WandbCallback
 import wandb
@@ -19,6 +20,10 @@ import os
 import sys
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.dirname(CURRENT_DIR))
+if __package__:
+    from .training_csv import AppendTrainingCsvCallback
+else:
+    from training_csv import AppendTrainingCsvCallback
 
 
 def get_parser():
@@ -204,6 +209,8 @@ class TrainingThread(QtCore.QThread):
         total_timesteps = self.cfg.getint('options', 'total_timesteps')
         self.env.model = model
         self.env.data_path = data_path
+        csv_path = os.path.join(data_path, 'training_log.csv')
+        csv_callback = AppendTrainingCsvCallback(csv_path)
 
         if self.cfg.getboolean('options', 'use_wandb'):
             # if algo == 'TD3' or algo == 'SAC':
@@ -213,15 +220,18 @@ class TrainingThread(QtCore.QThread):
             model.learn(
                 total_timesteps,
                 log_interval=1,
-                callback=WandbCallback(
-                    model_save_freq=10000,
-                    gradient_save_freq=5000,
-                    model_save_path=model_path,
-                    verbose=2,
-                )
+                callback=CallbackList([
+                    csv_callback,
+                    WandbCallback(
+                        model_save_freq=10000,
+                        gradient_save_freq=5000,
+                        model_save_path=model_path,
+                        verbose=2,
+                    ),
+                ])
             )
         else:
-            model.learn(total_timesteps)
+            model.learn(total_timesteps, callback=csv_callback)
 
         # ! ---------------------------model save----------------------------------------------------
         model_name = 'model_sb3'
@@ -229,6 +239,7 @@ class TrainingThread(QtCore.QThread):
 
         print('training finished')
         print('model saved to: {}'.format(model_path))
+        print('training data saved to: {}'.format(data_path))
         del model
 
         if self.cfg.getboolean('options', 'use_wandb'):

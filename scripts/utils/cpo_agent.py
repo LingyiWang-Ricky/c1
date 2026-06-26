@@ -21,6 +21,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributions import Normal
 
+if __package__:
+    from .training_csv import append_training_csv_row, ensure_training_csv_header
+else:
+    from training_csv import append_training_csv_row, ensure_training_csv_header
+
 
 def _cfg_get(cfg, section, option, default, cast):
     try:
@@ -189,11 +194,14 @@ class CPOAgent:
             next_v, next_cv = values[t], cost_values[t]
         return adv, ret, cadv, cret
 
-    def learn(self, total_timesteps, log_interval=1, callback=None):
+    def learn(self, total_timesteps, log_interval=1, callback=None, csv_path=None):
+        del callback  # kept for SB3-style call compatibility; this agent logs CSV internally.
+        ensure_training_csv_header(csv_path)
         obs = self.env.reset()
         self._last_obs = obs
         steps_done = 0
         epoch = 0
+        episode = 1
         ep_ret, ep_cost, ep_len = 0.0, 0.0, 0
         while steps_done < total_timesteps:
             batch = {k: [] for k in ("obs", "actn", "logp", "rew", "cost", "val", "cval", "done")}
@@ -228,10 +236,14 @@ class CPOAgent:
                 ep_cost += cost
                 ep_len += 1
                 steps_done += 1
+                append_training_csv_row(
+                    csv_path, steps_done, episode, ep_len, reward, ep_ret,
+                    cost, ep_cost, done, info, lagrange=float(self.lagrange))
                 obs = next_obs
                 if done:
                     obs = self.env.reset()
                     path = {k: [] for k in path}
+                    episode += 1
                     ep_ret, ep_cost, ep_len = 0.0, 0.0, 0
 
             with th.no_grad():
