@@ -97,12 +97,16 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
             self.work_space_y = [-300, 100]
             self.work_space_z = [0, 100]
             self.max_episode_steps = 400
-        elif self.env_name == 'City_400':
-            # note: the start and end points will be covered by update_start_and_goal_pose_random function
+        elif self.env_name in ('City_400', 'City_400_400'):
             start_position = [0, 0, 50]
-            goal_position = [280, -200, 50]
-            self.dynamic_model.set_start(start_position, random_angle=0)
-            self.dynamic_model._set_goal_pose_single(goal_position)
+            goal_rect = [-220, -220, 220, 220]
+            self.dynamic_model.set_start(start_position, random_angle=math.pi*2)
+            if hasattr(self.dynamic_model, '_set_goal_pose_single'):
+                # Fixed-wing dynamics randomize the start/goal rectangle at reset.
+                self.dynamic_model._set_goal_pose_single([200, -200, 50])
+            else:
+                # Multirotor dynamics randomize the goal on the City_400 boundary.
+                self.dynamic_model.set_goal(rect=goal_rect, random_angle=math.pi*2)
             self.work_space_x = [-220, 220]
             self.work_space_y = [-220, 220]
             self.work_space_z = [0, 100]
@@ -169,6 +173,7 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
         self.client = self.dynamic_model.client
         self.state_feature_length = self.dynamic_model.state_feature_length
         self.cnn_feature_length = self.cfg.getint('options', 'cnn_feature_num')
+        self.vector_feature_length = 5
 
         # training state
         self.episode_num = 0
@@ -191,7 +196,7 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
         if self.perception_type == 'vector' or self.perception_type == 'lgmd':
             self.observation_space = spaces.Box(low=0, high=1,
                                                 shape=(1,
-                                                       self.cnn_feature_length + self.state_feature_length),
+                                                       self.vector_feature_length + self.state_feature_length),
                                                 dtype=np.float32)
         else:
             self.observation_space = spaces.Box(low=0, high=255,
@@ -410,7 +415,7 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
 
         image_obs = image_uint8
         split_row = 1
-        split_col = 5
+        split_col = self.vector_feature_length
 
         v_split_list = np.vsplit(image_obs, split_row)
 
@@ -439,7 +444,7 @@ class AirsimGymEnv(gym.Env, QtCore.QThread):
 
         self.lgmd.update(img_gray)
 
-        split_col_num = 5
+        split_col_num = self.vector_feature_length
         s_layer = self.lgmd.s_layer  # (192, 320)
         s_layer_split = np.hsplit(s_layer, split_col_num)  # (192, 109)
 
